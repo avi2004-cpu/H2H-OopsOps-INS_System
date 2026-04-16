@@ -1,3 +1,4 @@
+timestamp,device_id,mac,type,connected_to,traffic,signal,status
 1776358350,device_0,AA:BB:CC:00,camera,ap_1,35,70,active
 1776358350,device_1,AA:BB:CC:01,phone,ap_2,36,68,active
 1776358350,device_2,AA:BB:CC:02,sensor,ap_1,17,63,active
