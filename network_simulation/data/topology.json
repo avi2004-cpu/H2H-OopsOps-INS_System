@@ -1,0 +1,165 @@
+{
+    "directed": false,
+    "multigraph": false,
+    "graph": {},
+    "nodes": [
+        {
+            "type": "switch",
+            "id": "switch_1"
+        },
+        {
+            "type": "switch",
+            "id": "switch_2"
+        },
+        {
+            "type": "access_point",
+            "id": "ap_1"
+        },
+        {
+            "type": "access_point",
+            "id": "ap_2"
+        },
+        {
+            "type": "access_point",
+            "id": "ap_3"
+        },
+        {
+            "type": "phone",
+            "id": "device_0"
+        },
+        {
+            "type": "sensor",
+            "id": "device_1"
+        },
+        {
+            "type": "sensor",
+            "id": "device_2"
+        },
+        {
+            "type": "smart_light",
+            "id": "device_3"
+        },
+        {
+            "type": "sensor",
+            "id": "device_4"
+        },
+        {
+            "type": "phone",
+            "id": "device_5"
+        },
+        {
+            "type": "smart_light",
+            "id": "device_6"
+        },
+        {
+            "type": "thermostat",
+            "id": "device_7"
+        },
+        {
+            "type": "camera",
+            "id": "device_8"
+        },
+        {
+            "type": "camera",
+            "id": "device_9"
+        },
+        {
+            "type": "thermostat",
+            "id": "device_10"
+        },
+        {
+            "type": "sensor",
+            "id": "device_11"
+        },
+        {
+            "type": "camera",
+            "id": "device_12"
+        },
+        {
+            "type": "sensor",
+            "id": "device_13"
+        },
+        {
+            "type": "smart_light",
+            "id": "device_14"
+        }
+    ],
+    "edges": [
+        {
+            "source": "switch_1",
+            "target": "switch_2"
+        },
+        {
+            "source": "switch_1",
+            "target": "ap_1"
+        },
+        {
+            "source": "switch_1",
+            "target": "ap_2"
+        },
+        {
+            "source": "switch_2",
+            "target": "ap_3"
+        },
+        {
+            "source": "ap_1",
+            "target": "device_3"
+        },
+        {
+            "source": "ap_1",
+            "target": "device_10"
+        },
+        {
+            "source": "ap_2",
+            "target": "device_1"
+        },
+        {
+            "source": "ap_2",
+            "target": "device_2"
+        },
+        {
+            "source": "ap_2",
+            "target": "device_4"
+        },
+        {
+            "source": "ap_2",
+            "target": "device_6"
+        },
+        {
+            "source": "ap_2",
+            "target": "device_9"
+        },
+        {
+            "source": "ap_2",
+            "target": "device_12"
+        },
+        {
+            "source": "ap_2",
+            "target": "device_14"
+        },
+        {
+            "source": "ap_3",
+            "target": "device_0"
+        },
+        {
+            "source": "ap_3",
+            "target": "device_5"
+        },
+        {
+            "source": "ap_3",
+            "target": "device_7"
+        },
+        {
+            "source": "ap_3",
+            "target": "device_8"
+        },
+        {
+            "source": "ap_3",
+            "target": "device_11"
+        },
+        {
+            "source": "ap_3",
+            "target": "device_13"
+        }
+    ]
+}
