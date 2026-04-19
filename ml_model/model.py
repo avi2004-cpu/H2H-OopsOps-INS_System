@@ -6,63 +6,125 @@ import numpy as np
 
 FEATURES = ['traffic', 'packet_rate', 'signal']
 
+# Baseline thresholds (based on observed normal data)
+TRAFFIC_FLOOD_THRESHOLD  = 50
+SIGNAL_DROP_THRESHOLD    = 40
+PACKET_FLOOD_THRESHOLD   = 80
+
+
 class AnomalyDetector:
+
     def __init__(self, contamination=0.1):
         self.model = IsolationForest(
             contamination=contamination,
             n_estimators=100,
             random_state=42
         )
-        self.scaler = StandardScaler()
+        self.scaler  = StandardScaler()
         self.trained = False
+        self.baseline_stats = {}
 
     def train(self, df: pd.DataFrame):
-    # Exclude known rogue devices from training baseline
+        """Train on clean baseline data only (no rogues, no offline)."""
         normal = df[
             (df['status'] == 'active') &
             (~df['device_id'].str.contains('rogue', case=False, na=False))
         ][FEATURES].fillna(0)
+
+        # Store baseline stats for explainability
+        self.baseline_stats = {
+            'traffic_mean':     round(normal['traffic'].mean(), 1),
+            'traffic_std':      round(normal['traffic'].std(), 1),
+            'packet_rate_mean': round(normal['packet_rate'].mean(), 1),
+            'signal_mean':      round(normal['signal'].mean(), 1),
+        }
+
         X_scaled = self.scaler.fit_transform(normal)
         self.model.fit(X_scaled)
         self.trained = True
         print(f"[✓] Model trained on {len(normal)} normal samples")
-        
+        print(f"    Baseline → traffic: {self.baseline_stats['traffic_mean']} pkts/s | "
+              f"signal: {self.baseline_stats['signal_mean']} dBm | "
+              f"packet_rate: {self.baseline_stats['packet_rate_mean']}")
+
     def predict(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Run anomaly detection and return enriched DataFrame."""
         if not self.trained:
-            raise ValueError("Model not trained yet.")
+            raise ValueError("Model not trained yet. Call train() first.")
+
         df = df.copy()
-        X = df[FEATURES].fillna(0)
+        X        = df[FEATURES].fillna(0)
         X_scaled = self.scaler.transform(X)
+
         df['anomaly_score'] = self.model.decision_function(X_scaled)
-        df['is_anomaly'] = self.model.predict(X_scaled) == -1
-        df['anomaly_type'] = df.apply(self._classify, axis=1)
-        df['explanation'] = df.apply(self._explain, axis=1)
+        df['is_anomaly']    = self.model.predict(X_scaled) == -1
+        df['anomaly_type']  = df.apply(self._classify, axis=1)
+        df['explanation']   = df.apply(self._explain, axis=1)
+        df['severity']      = df.apply(self._severity, axis=1)
         return df
 
-    def _classify(self, row):
+    # ── Private helpers ──────────────────────────────────────────────
+
+    def _classify(self, row) -> str:
         if not row['is_anomaly']:
             return 'normal'
-        if row['traffic'] > 150:
-            return 'traffic_flood'
         if row['status'] == 'offline':
             return 'device_offline'
-        if row['signal'] < 20:
-            return 'signal_drop'
-    # Catch rogue devices by MAC pattern or device_id
         if 'rogue' in str(row['device_id']).lower():
             return 'rogue_device'
-        return 'unknown_anomaly'
+        if row['traffic'] > TRAFFIC_FLOOD_THRESHOLD:
+            return 'traffic_flood'
+        if row['signal'] < SIGNAL_DROP_THRESHOLD:
+            return 'signal_drop'
+        if row['packet_rate'] > PACKET_FLOOD_THRESHOLD:
+            return 'packet_flood'
+        return 'suspicious_behavior'
 
-    def _explain(self, row):
-        t = row['anomaly_type']
+    def _explain(self, row) -> str:
+        t    = row['anomaly_type']
+        dev  = row['device_id']
+        base = self.baseline_stats
+
         if t == 'normal':
             return 'Normal behavior'
-        if t == 'traffic_flood':
-            return (f"Traffic spike on {row['device_id']}: "
-                    f"{row['traffic']} pkts/s (normal ~30)")
+
         if t == 'device_offline':
-            return f"{row['device_id']} went offline"
+            return (f"{dev} is offline — "
+                    f"no telemetry received, link may be down")
+
+        if t == 'rogue_device':
+            return (f"Unrecognised device {dev} detected — "
+                    f"MAC not in approved list, possible intrusion")
+
+        if t == 'traffic_flood':
+            avg = base.get('traffic_mean', 30)
+            return (f"Traffic spike on {dev}: "
+                    f"{row['traffic']} pkts/s vs normal avg {avg} pkts/s "
+                    f"(+{round((row['traffic']-avg)/max(avg,1)*100)}%)")
+
         if t == 'signal_drop':
-            return (f"Weak signal on {row['device_id']}: "
-                    f"{row['signal']} dBm (normal >60)")
-        return f"Anomaly score: {row['anomaly_score']:.3f}"
+            avg = base.get('signal_mean', 75)
+            return (f"Weak signal on {dev}: "
+                    f"{row['signal']} dBm vs normal avg {avg} dBm — "
+                    f"possible interference or physical obstruction")
+
+        if t == 'packet_flood':
+            avg = base.get('packet_rate_mean', 50)
+            return (f"Packet rate anomaly on {dev}: "
+                    f"{row['packet_rate']} pkts/s vs normal avg {avg} pkts/s — "
+                    f"possible DoS or misconfiguration")
+
+        return (f"Behavioural deviation on {dev} — "
+                f"anomaly score: {row['anomaly_score']:.3f} "
+                f"(normal range > 0)")
+
+    def _severity(self, row) -> str:
+        """High / Medium / Low based on anomaly score magnitude."""
+        if not row['is_anomaly']:
+            return 'none'
+        score = abs(row['anomaly_score'])
+        if score > 0.1:
+            return 'high'
+        if score > 0.05:
+            return 'medium'
+        return 'low'
