@@ -2,7 +2,6 @@ import random
 import time
 import pandas as pd
 import os
-
 # Base paths
 BASE_DIR = os.path.dirname(os.path.dirname(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
@@ -83,3 +82,5 @@ def generate_telemetry(devices, connections):
             # If file corrupted → recreate
             print("[WARNING] CSV corrupted. Recreating file...")
             df.to_csv(FILE, index=False)
+
+    return df

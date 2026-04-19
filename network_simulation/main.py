@@ -9,6 +9,9 @@ from network_simulation.simulation.anomalies import (
 )
 from network_simulation.simulation.discovery import simulate_arp, simulate_lldp
 
+from ml_model.model import AnomalyDetector
+
+import pandas as pd
 import time
 import random
 
@@ -16,38 +19,81 @@ import random
 devices = generate_devices(15)
 G, connections = create_topology(devices)
 
-# Export topology (for frontend)
 export_topology(G)
 
-print("\n🚀 Real-Time Network Simulation Running...\n")
+# Initialize ML model
+detector = AnomalyDetector(contamination=0.1)
+
+print("\nReal-Time Network Simulation + ML Running...\n")
+
+# =========================================
+# STEP 1: TRAIN MODEL (BASELINE DATA)
+# =========================================
+
+print("[INFO] Collecting baseline data...")
+
+baseline_data = []
+
+for _ in range(10):   # collect normal cycles
+    df = generate_telemetry(devices, connections)
+    baseline_data.append(df)
+
+baseline_df = pd.concat(baseline_data, ignore_index=True)
+
+detector.train(baseline_df)
+
+print("[INFO] Model trained successfully!\n")
 
 # Random anomaly timer
-next_anomaly_time = time.time() + random.randint(5, 15)
+next_anomaly_time = time.time() + random.randint(5, 10)
+
+# =========================================
+# STEP 2: REAL-TIME LOOP
+# =========================================
 
 try:
     while True:
-        # 1. Generate telemetry (continuous)
-        generate_telemetry(devices, connections)
+        # Generate telemetry
+        df = generate_telemetry(devices, connections)
 
-        # 2. Topology Discovery (ARP + LLDP)
+        # =========================================
+        # ML DETECTION
+        # =========================================
+        results = detector.predict(df)
+
+        anomalies = results[results['is_anomaly'] == True]
+
+        for _, row in anomalies.iterrows():
+            print(
+                f"🚨 [ML ALERT] {row['anomaly_type']} on {row['device_id']} → {row['explanation']}"
+            )
+
+        # Optional debug summary
+        print("\n[SUMMARY]")
+        print(results[['device_id', 'anomaly_type', 'is_anomaly']].head())
+
+        # =========================================
+        # TOPOLOGY DISCOVERY
+        # =========================================
         arp = simulate_arp(devices, connections)
         lldp = simulate_lldp(connections)
 
-        # Print small sample (clean output)
-        print("\n[DISCOVERY]")
-        print("ARP Sample:", list(arp.items())[:2])
-        print("LLDP Sample:", lldp[:2])
+        print("\n[DISCOVERY SAMPLE]")
+        print("ARP:", list(arp.items())[:2])
+        print("LLDP:", lldp[:2])
 
-        # 3. Inject anomalies at random intervals
+        # =========================================
+        # RANDOM ANOMALY INJECTION
+        # =========================================
         current_time = time.time()
 
         if current_time >= next_anomaly_time:
             anomaly = random.choices(
                 ["spike", "rogue", "offline", "mac"],
-                weights=[40, 20, 20, 20]
+                weights=[30, 20, 25, 25]
             )[0]
 
-            print("\n Injecting anomaly...")
+            print("\n⚠️ Injecting anomaly...")
 
             if anomaly == "spike":
                 traffic_spike(devices)
@@ -61,11 +107,9 @@ try:
             elif anomaly == "mac":
                 mac_spoof(devices)
 
-            # Schedule next anomaly
-            next_anomaly_time = current_time + random.randint(5, 15)
+            next_anomaly_time = current_time + random.randint(5, 10)
 
-        # Loop delay (real-time feel)
         time.sleep(1)
 
 except KeyboardInterrupt:
-    print("\n Simulation stopped safely.")
+    print("\nSimulation stopped.")
