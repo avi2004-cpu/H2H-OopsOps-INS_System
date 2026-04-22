@@ -6,7 +6,7 @@ import random
 
 import pandas as pd
 
-# ── Path setup (portable — no hardcoded paths) ────────────────────────
+# ── Path setup ─────────────────────────────────────────────
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
@@ -22,6 +22,8 @@ from network_simulation.simulation.anomalies import (
     rogue_device,
     start_link_flap,
     apply_flap_state,
+    ddos_attack,              # NEW
+    apply_active_attacks      # NEW
 )
 from network_simulation.simulation.discovery import (
     simulate_arp,
@@ -30,16 +32,15 @@ from network_simulation.simulation.discovery import (
 )
 from ml_model.model import AnomalyDetector
 
-# ── Paths ─────────────────────────────────────────────────────────────
+# ── Paths ─────────────────────────────────────────────
 STATUS_FILE = os.path.join(ROOT, "network_simulation", "data", "sim_status.json")
 
-# ── Anomaly injection config ──────────────────────────────────────────
-ANOMALY_CHOICES  = ["spike", "mac", "ap_offline", "device_offline", "rogue", "flap"]
-ANOMALY_WEIGHTS  = [25,      20,    15,            15,               15,      10   ]
+# ── Anomaly config ─────────────────────────────────────
+ANOMALY_CHOICES  = ["spike", "mac", "ap_offline", "device_offline", "rogue", "flap", "ddos"]
+ANOMALY_WEIGHTS  = [20,      15,    15,            15,               10,      10,     15   ]
 
 
 def write_status(tick, last_anomaly, anomaly_count, device_count):
-    """Write a live status file so the dashboard knows the sim is running."""
     payload = {
         "tick":          tick,
         "timestamp":     int(time.time()),
@@ -48,31 +49,32 @@ def write_status(tick, last_anomaly, anomaly_count, device_count):
         "device_count":  device_count,
         "alive":         True,
     }
+    os.makedirs(os.path.dirname(STATUS_FILE), exist_ok=True)
     with open(STATUS_FILE, "w") as f:
         json.dump(payload, f, indent=2)
 
 
-# ══════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════
 # SETUP
-# ══════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════
 
 devices = generate_devices(15)
 G, connections = create_topology(devices)
 export_topology(G)
 
-# Register all startup MACs as approved BEFORE telemetry starts
 register_approved_macs(devices)
 
 detector = AnomalyDetector(contamination=0.1)
 
-print("\n🚀 Real-Time Network Simulation + ML Running...\n")
+print("\nReal-Time Network Simulation + ML Running...\n")
 
-# ══════════════════════════════════════════════════════════════════════
-# STEP 1: COLLECT BASELINE (normal traffic only)
-# ══════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════
+# BASELINE TRAINING
+# ════════════════════════════════════════════════════════
 
-print("[INFO] Collecting baseline data (10 cycles)...")
+print("[INFO] Collecting baseline data...")
 baseline_frames = []
+
 for _ in range(10):
     df = generate_telemetry(devices, connections)
     baseline_frames.append(df)
@@ -80,47 +82,57 @@ for _ in range(10):
 
 baseline_df = pd.concat(baseline_frames, ignore_index=True)
 detector.train(baseline_df)
+
 print("[INFO] Model trained ✓\n")
 
-# ══════════════════════════════════════════════════════════════════════
-# STEP 2: REAL-TIME LOOP
-# ══════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════
+# REAL-TIME LOOP
+# ════════════════════════════════════════════════════════
 
-next_anomaly_time = time.time() + random.randint(5, 10)
-tick          = 0
+next_anomaly_time = time.time() + random.randint(15, 25)
+
+tick = 0
 anomaly_count = 0
-last_anomaly  = "none"
+last_anomaly = "none"
 
 try:
     while True:
         tick += 1
 
-        # Apply any active link-flap cycles
+        # APPLY CONTINUOUS STATES
         apply_flap_state(tick)
+        apply_active_attacks(devices)   # 🔥 NEW (persistent attacks)
 
-        # ── Telemetry ──────────────────────────────────────────────
+        # DEVICE ROAMING (REALISM)
+        if random.random() < 0.05:
+            dev = random.choice(devices)
+            new_ap = random.choice(["ap_1", "ap_2", "ap_3"])
+            connections[dev["device_id"]] = new_ap
+            print(f"[MOVE] {dev['device_id']} → {new_ap}")
+
+        # ── TELEMETRY ─────────────────────────────
         df = generate_telemetry(devices, connections)
 
-        # ── ML Detection ───────────────────────────────────────────
+        # ── ML DETECTION ─────────────────────────
         results   = detector.predict(df)
         anomalies = results[results["is_anomaly"]]
 
         for _, row in anomalies.iterrows():
             print(
-                f"🚨 [ML ALERT] [{row['severity'].upper()}] "
+                f"[ML ALERT] [{row['severity'].upper()}] "
                 f"{row['anomaly_type']} on {row['device_id']} "
                 f"→ {row['explanation']}"
             )
 
-        # ── Write status for dashboard ─────────────────────────────
+        # ── DASHBOARD STATUS ─────────────────────
         write_status(tick, last_anomaly, anomaly_count, len(devices))
 
-        # ── Discovery (ARP + LLDP + SNMP) ─────────────────────────
+        # ── DISCOVERY ────────────────────────────
         arp  = simulate_arp(devices, connections)
         lldp = simulate_lldp(connections)
         snmp = simulate_snmp_walk(devices, connections)
 
-        if tick % 5 == 0:   # print sample every 5 ticks to reduce noise
+        if tick % 5 == 0:
             print(f"\n[DISCOVERY tick={tick}]")
             print("ARP  sample:", list(arp.items())[:2])
             print("LLDP sample:", lldp[:2])
@@ -128,10 +140,10 @@ try:
                 {s["device_id"]: list(s["oids"].items())[:2]} for s in snmp[:2]
             ])
 
-        # ── Anomaly Injection ──────────────────────────────────────
+        # ── ANOMALY INJECTION ────────────────────
         if time.time() >= next_anomaly_time:
             choice = random.choices(ANOMALY_CHOICES, weights=ANOMALY_WEIGHTS)[0]
-            print(f"\n⚠️  [INJECT] {choice.upper()}")
+            print(f"\n[INJECT] {choice.upper()}")
 
             if choice == "spike":
                 dev = traffic_spike(devices)
@@ -157,8 +169,12 @@ try:
                 dev = start_link_flap(devices)
                 last_anomaly = f"link_flap on {dev}"
 
+            elif choice == "ddos":   # NEW
+                victims = ddos_attack(devices)
+                last_anomaly = f"ddos on {victims}"
+
             anomaly_count += 1
-            next_anomaly_time = time.time() + random.randint(5, 10)
+            next_anomaly_time = time.time() + random.randint(20, 30)
 
         time.sleep(1)
 

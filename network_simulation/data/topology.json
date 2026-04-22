@@ -28,7 +28,7 @@
             "id": "device_0"
         },
         {
-            "type": "phone",
+            "type": "smart_light",
             "id": "device_1"
         },
         {
@@ -36,7 +36,7 @@
             "id": "device_2"
         },
         {
-            "type": "sensor",
+            "type": "smart_light",
             "id": "device_3"
         },
         {
@@ -44,11 +44,11 @@
             "id": "device_4"
         },
         {
-            "type": "thermostat",
+            "type": "camera",
             "id": "device_5"
         },
         {
-            "type": "smart_light",
+            "type": "camera",
             "id": "device_6"
         },
         {
@@ -56,15 +56,15 @@
             "id": "device_7"
         },
         {
-            "type": "camera",
+            "type": "thermostat",
             "id": "device_8"
         },
         {
-            "type": "sensor",
+            "type": "camera",
             "id": "device_9"
         },
         {
-            "type": "thermostat",
+            "type": "smart_light",
             "id": "device_10"
         },
         {
@@ -72,7 +72,7 @@
             "id": "device_11"
         },
         {
-            "type": "phone",
+            "type": "smart_light",
             "id": "device_12"
         },
         {
@@ -80,7 +80,7 @@
             "id": "device_13"
         },
         {
-            "type": "phone",
+            "type": "smart_light",
             "id": "device_14"
         }
     ],
@@ -103,39 +103,23 @@
         },
         {
             "source": "ap_1",
-            "target": "device_3"
-        },
-        {
-            "source": "ap_1",
-            "target": "device_10"
-        },
-        {
-            "source": "ap_1",
-            "target": "device_12"
-        },
-        {
-            "source": "ap_1",
-            "target": "device_13"
-        },
-        {
-            "source": "ap_2",
             "target": "device_2"
         },
         {
-            "source": "ap_2",
-            "target": "device_4"
-        },
-        {
-            "source": "ap_2",
-            "target": "device_5"
-        },
-        {
-            "source": "ap_2",
-            "target": "device_8"
+            "source": "ap_1",
+            "target": "device_3"
         },
         {
             "source": "ap_2",
             "target": "device_9"
+        },
+        {
+            "source": "ap_2",
+            "target": "device_11"
+        },
+        {
+            "source": "ap_2",
+            "target": "device_12"
         },
         {
             "source": "ap_3",
@@ -147,6 +131,14 @@
         },
         {
             "source": "ap_3",
+            "target": "device_4"
+        },
+        {
+            "source": "ap_3",
+            "target": "device_5"
+        },
+        {
+            "source": "ap_3",
             "target": "device_6"
         },
         {
@@ -155,7 +147,15 @@
         },
         {
             "source": "ap_3",
-            "target": "device_11"
+            "target": "device_8"
+        },
+        {
+            "source": "ap_3",
+            "target": "device_10"
+        },
+        {
+            "source": "ap_3",
+            "target": "device_13"
         },
         {
             "source": "ap_3",

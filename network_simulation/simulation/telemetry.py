@@ -3,7 +3,7 @@ import time
 import pandas as pd
 import os
 
-from anomalies import APPROVED_MACS
+from network_simulation.simulation.anomalies import APPROVED_MACS
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, "data")
@@ -15,25 +15,26 @@ SNMP_OID_IN_OCTETS = "1.3.6.1.2.1.2.2.1.10"
 COLUMNS = [
     "timestamp", "device_id", "mac", "type", "connected_to",
     "traffic", "packet_rate", "signal", "status",
-    "mac_changed",   # 1 if MAC differs from approved baseline
-    "flap_count",    # number of times device has flapped this session
-    "snmp_oid",      # simulated SNMP OID label
-    "snmp_value",    # simulated OID value (in octets)
-    "syslog_msg",    # simulated syslog entry
+    "mac_changed",
+    "flap_count",
+    "snmp_oid",
+    "snmp_value",
+    "syslog_msg",
 ]
 
 
 def _syslog(device_id, status, traffic, mac_changed):
-    """Generate a realistic syslog-format message."""
     ts   = time.strftime("%b %d %H:%M:%S")
     host = device_id.replace("_", "-")
+
     if mac_changed:
         return f"{ts} {host} kernel: [WARN] MAC address change detected"
     if status == "offline":
         return f"{ts} {host} networkd: [ERR] Interface eth0 link down"
     if traffic > 200:
-        return f"{ts} {host} iotd: [WARN] Unusually high traffic {traffic} pkts/s"
-    return f"{ts} {host} iotd: [INFO] Device reporting normally"
+        return f"{ts} {host} iotd: [WARN] High traffic {traffic} pkts/s"
+
+    return f"{ts} {host} iotd: [INFO] Device normal"
 
 
 def generate_telemetry(devices, connections):
@@ -41,19 +42,59 @@ def generate_telemetry(devices, connections):
 
     for d in devices:
         base_traffic = d.get("base_traffic", random.randint(10, 50))
-        traffic      = d.get("traffic_override", base_traffic + random.randint(-5, 10))
-        signal       = d.get("signal_override",  random.randint(60, 100))
-        packet_rate  = d.get("packet_override",  random.randint(20, 100))
         status       = d.get("status", "active")
 
-        # MAC change detection — compares live MAC against approved whitelist
-        mac_changed  = 0 if d["mac"] in APPROVED_MACS else 1
+        # STATEFUL TRAFFIC
+        last_traffic = d.get("last_traffic", base_traffic)
+        traffic = last_traffic + random.randint(-5, 5)
 
-        # Flap count — incremented externally by apply_flap_state()
-        flap_count   = d.get("flap_count", 0)
+        # TIME-BASED PATTERN
+        hour = int(time.time() / 5) % 24
+        if 9 <= hour <= 18:
+            traffic *= 1.3
+        else:
+            traffic *= 0.7
 
-        # Simulated SNMP value
-        snmp_value   = max(1, traffic) * 1024   # bytes approximation
+        # DEVICE TYPE BEHAVIOR
+        if d["type"] == "camera":
+            traffic *= 1.2
+        elif d["type"] == "sensor":
+            traffic *= 0.5
+        elif d["type"] == "phone":
+            traffic *= 0.9
+
+        # Apply anomaly override
+        traffic = d.get("traffic_override", traffic)
+        traffic = max(1, int(traffic))
+
+        # STATEFUL SIGNAL
+        last_signal = d.get("last_signal", d.get("base_signal", 80))
+        signal = last_signal + random.randint(-2, 2)
+
+        # AP LOAD IMPACT
+        ap = connections.get(d["device_id"])
+        ap_load = sum(1 for v in connections.values() if v == ap)
+
+        if ap_load > 8:
+            signal -= 10
+
+        signal = d.get("signal_override", signal)
+        signal = max(0, min(100, int(signal)))
+
+        # PACKET RATE
+        packet_rate = d.get("packet_override", random.randint(20, 100))
+
+        # SAVE STATE
+        d["last_traffic"] = traffic
+        d["last_signal"] = signal
+
+        # MAC detection
+        mac_changed = 0 if d["mac"] in APPROVED_MACS else 1
+
+        flap_count = d.get("flap_count", 0)
+
+        # SNMP simulation
+        snmp_value = traffic * 1024
 
         row = {
             "timestamp":    int(time.time()),
@@ -61,7 +102,7 @@ def generate_telemetry(devices, connections):
             "mac":          d["mac"],
             "type":         d.get("type", "unknown"),
             "connected_to": connections.get(d["device_id"], "unknown"),
-            "traffic":      max(1, traffic),
+            "traffic":      traffic,
             "packet_rate":  packet_rate,
             "signal":       signal,
             "status":       status,
@@ -71,13 +112,36 @@ def generate_telemetry(devices, connections):
             "snmp_value":   snmp_value,
             "syslog_msg":   _syslog(d["device_id"], status, traffic, mac_changed),
         }
+
         data.append(row)
 
         print(
-            f"{d['device_id']} → traffic:{row['traffic']} "
+            f"{d['device_id']} → traffic:{traffic} "
             f"pkts:{packet_rate} sig:{signal} "
             f"status:{status} mac_chg:{mac_changed} flap:{flap_count}"
         )
 
-    return df
+    # CREATE DATAFRAME
+    df = pd.DataFrame(data, columns=COLUMNS)
 
+    # Ensure directory exists
+    os.makedirs(DATA_DIR, exist_ok=True)
+
+    # SAFE CSV WRITING (HEADER + AUTO FIX)
+    if not os.path.exists(FILE):
+        df.to_csv(FILE, index=False)
+    else:
+        try:
+            existing = pd.read_csv(FILE, nrows=0)
+
+            if list(existing.columns) != COLUMNS:
+                print("[INFO] Fixing CSV header mismatch...")
+                df.to_csv(FILE, index=False)
+            else:
+                df.to_csv(FILE, mode='a', header=False, index=False)
+
+        except Exception:
+            print("[WARNING] CSV corrupted. Recreating file...")
+            df.to_csv(FILE, index=False)
+
+    return df

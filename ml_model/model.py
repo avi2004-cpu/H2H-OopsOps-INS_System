@@ -5,8 +5,7 @@ import pandas as pd
 import numpy as np
 
 # ── Feature set ──────────────────────────────────────────────────────
-BASE_FEATURES = ['traffic', 'packet_rate', 'signal']
-
+BASE_FEATURES = ['traffic', 'packet_rate', 'signal', 'mac_changed', 'flap_count']
 TRAFFIC_FLOOD_THRESH  = 50
 SIGNAL_DROP_THRESH    = 40
 PACKET_FLOOD_THRESH   = 80
@@ -29,7 +28,7 @@ class AnomalyDetector:
     def train(self, df: pd.DataFrame):
         clean = df[
             (df['status'] == 'active') &
-            (~df['device_id'].str.contains('rogue', case=False, na=False)) &
+            (~df['mac'].astype(str).str.startswith("RG:")) &
             (~df.get('mac', pd.Series([''] * len(df))).str.upper().str.contains('FA:KE', na=False))
         ].copy()
 
@@ -106,7 +105,7 @@ class AnomalyDetector:
         df.loc[df['status'] == 'offline', 'is_anomaly'] = True
         if 'mac' in df.columns:
             df.loc[df['mac'].str.upper().str.contains('FA:KE', na=False), 'is_anomaly'] = True
-        df.loc[df['device_id'].str.contains('rogue', case=False, na=False), 'is_anomaly'] = True
+        df.loc[df['mac'].astype(str).str.startswith("RG:"), 'is_anomaly'] = True
 
         df['anomaly_type'] = df.apply(self._classify, axis=1)
         df['explanation']  = df.apply(self._explain, axis=1)
@@ -151,7 +150,7 @@ class AnomalyDetector:
             return 'device_offline'
         if 'mac' in row.index and 'FA:KE' in str(row.get('mac', '')).upper():
             return 'mac_spoof'
-        if 'rogue' in str(row['device_id']).lower():
+        if str(row['mac']).startswith("RG:"):
             return 'rogue_device'
         if row.get('z_traffic', 0) > 3.5 or row['traffic'] > TRAFFIC_FLOOD_THRESH:
             return 'traffic_flood'

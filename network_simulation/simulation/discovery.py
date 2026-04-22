@@ -1,5 +1,5 @@
 import random
-from anomalies import APPROVED_MACS
+from network_simulation.simulation.anomalies import APPROVED_MACS
 
 
 # ARP Simulation 

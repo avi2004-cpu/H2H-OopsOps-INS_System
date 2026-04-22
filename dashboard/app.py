@@ -1,8 +1,10 @@
 import streamlit as st
 import pandas as pd
 import json, os, sys, time
+import os
 
-ROOT = r"C:\Users\chhet\OneDrive\Desktop\H2H-OopsOps-INS_System"
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CSV_PATH = os.path.join(ROOT, "network_simulation", "data", "network_data.csv")
 sys.path.insert(0, ROOT)
 
 CSV_PATH  = os.path.join(ROOT, 'network_simulation', 'data', 'network_data.csv')
