@@ -11,7 +11,6 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 sys.path.insert(0, ROOT)
 
-# Use ONE consistent path
 DATA_FILE = os.path.join(ROOT, "network_simulation", "data", "network_data.csv")
 STATUS_FILE = os.path.join(ROOT, "network_simulation", "data", "sim_status.json")
 
@@ -39,9 +38,9 @@ from network_simulation.simulation.discovery import (
 from ml_model.model import AnomalyDetector
 
 
-# ── Anomaly config ─────────────────────────────────────────
+# ── Config ─────────────────────────────────────────
 ANOMALY_CHOICES = ["spike", "mac", "ap_offline", "device_offline", "rogue", "flap", "ddos"]
-ANOMALY_WEIGHTS = [15, 10, 10, 10, 5, 5, 8]   # tuned (less aggressive)
+ANOMALY_WEIGHTS = [15, 10, 10, 10, 5, 5, 8]
 
 
 # ── Status writer ──────────────────────────────────────────
@@ -60,104 +59,58 @@ def write_status(tick, last_anomaly, anomaly_count, device_count):
 
 
 # ════════════════════════════════════════════════════════
-# SETUP
+# 🔥 CORE SIMULATION ENGINE (USED BY API)
 # ════════════════════════════════════════════════════════
+def run_simulation():
+    # reset CSV
+    if os.path.exists(DATA_FILE):
+        open(DATA_FILE, "w").close()
 
-# RESET CSV ON EVERY RUN (SAFE)
-if os.path.exists(DATA_FILE):
-    print("[INFO] Clearing old CSV data...")
-    open(DATA_FILE, "w").close()
+    devices = generate_devices(15)
+    G, connections = create_topology(devices)
+    export_topology(G)
 
-print("[INFO] New simulation session started\n")
+    register_approved_macs(devices)
 
-devices = generate_devices(15)
-G, connections = create_topology(devices)
-export_topology(G)
+    detector = AnomalyDetector(contamination=0.1)
 
-register_approved_macs(devices)
+    # baseline
+    baseline_frames = []
+    for _ in range(8):
+        df = generate_telemetry(devices, connections)
+        baseline_frames.append(df)
+        time.sleep(0.2)
 
-detector = AnomalyDetector(contamination=0.1)
+    baseline_df = pd.concat(baseline_frames, ignore_index=True)
+    detector.train(baseline_df)
 
-print("Real-Time Network Simulation + ML Running...\n")
+    next_anomaly_time = time.time() + random.randint(45, 60)
 
+    tick = 0
+    anomaly_count = 0
+    last_anomaly = "none"
 
-# ════════════════════════════════════════════════════════
-# BASELINE TRAINING
-# ════════════════════════════════════════════════════════
-
-print("[INFO] Collecting baseline data...")
-baseline_frames = []
-
-for _ in range(10):
-    df = generate_telemetry(devices, connections)
-    baseline_frames.append(df)
-    time.sleep(0.2)
-
-baseline_df = pd.concat(baseline_frames, ignore_index=True)
-detector.train(baseline_df)
-
-print("[INFO] Model trained ✓\n")
-
-
-# ════════════════════════════════════════════════════════
-# REAL-TIME LOOP
-# ════════════════════════════════════════════════════════
-
-next_anomaly_time = time.time() + random.randint(45, 60)
-
-tick = 0
-anomaly_count = 0
-last_anomaly = "none"
-
-try:
     while True:
         tick += 1
 
-        # ── Apply ongoing states ─────────────────────
         apply_flap_state(tick)
         apply_active_attacks(devices)
 
-        # ── Device roaming (realism) ────────────────
+        # roaming
         if random.random() < 0.05:
             dev = random.choice(devices)
             new_ap = random.choice(["ap_1", "ap_2", "ap_3"])
             connections[dev["device_id"]] = new_ap
-            print(f"[MOVE] {dev['device_id']} → {new_ap}")
 
-        # ── Telemetry ───────────────────────────────
         df = generate_telemetry(devices, connections)
 
-        # ── ML Detection ────────────────────────────
         results = detector.predict(df)
-        anomalies = results[results["is_anomaly"]]
 
-        for _, row in anomalies.iterrows():
-            print(
-                f"[ML ALERT] [{row['severity'].upper()}] "
-                f"{row['anomaly_type']} on {row['device_id']} "
-                f"→ {row['explanation']}"
-            )
-
-        # ── Dashboard status ────────────────────────
         write_status(tick, last_anomaly, anomaly_count, len(devices))
 
-        # ── Discovery simulation ────────────────────
-        arp = simulate_arp(devices, connections)
-        lldp = simulate_lldp(connections)
-        snmp = simulate_snmp_walk(devices, connections)
-
-        if tick % 5 == 0:
-            print(f"\n[DISCOVERY tick={tick}]")
-            print("ARP  sample:", list(arp.items())[:2])
-            print("LLDP sample:", lldp[:2])
-            print("SNMP sample:", [
-                {s["device_id"]: list(s["oids"].items())[:2]} for s in snmp[:2]
-            ])
-
-        # ── Anomaly injection ───────────────────────
+        # anomaly injection
         if time.time() >= next_anomaly_time:
             choice = random.choices(ANOMALY_CHOICES, weights=ANOMALY_WEIGHTS)[0]
-            print(f"\n[INJECT] {choice.upper()}")
 
             if choice == "spike":
                 dev = traffic_spike(devices)
@@ -188,11 +141,22 @@ try:
                 last_anomaly = f"ddos on {victims}"
 
             anomaly_count += 1
-
-            # slower injection
             next_anomaly_time = time.time() + random.randint(45, 60)
 
-        time.sleep(1.2)   # slightly slower for dashboard readability
+        yield df   # KEY FOR API
 
-except KeyboardInterrupt:
-    print("\nSimulation stopped cleanly.")
+        time.sleep(1.2)
+
+
+# ════════════════════════════════════════════════════════
+# LOCAL RUN (CLI)
+# ════════════════════════════════════════════════════════
+if __name__ == "__main__":
+    print("[INFO] Starting simulation locally...\n")
+
+    try:
+        for df in run_simulation():
+            print(df.tail(1))
+
+    except KeyboardInterrupt:
+        print("\nSimulation stopped cleanly.")
