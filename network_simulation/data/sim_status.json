@@ -1,8 +1,8 @@
 {
-  "tick": 55,
-  "timestamp": 1776878198,
-  "last_anomaly": "rogue_device: unknown_907",
-  "anomaly_count": 3,
-  "device_count": 16,
+  "tick": 2,
+  "timestamp": 1776907430,
+  "last_anomaly": "none",
+  "anomaly_count": 0,
+  "device_count": 15,
   "alive": true
 }
