@@ -30,8 +30,8 @@ def register_approved_macs(devices):
 
 def traffic_spike(devices):
     device = random.choice(devices)
-    device["traffic_override"] = random.randint(600, 900)
-    device["packet_override"]  = random.randint(250, 350)
+    device["traffic_override"] = random.randint(120, 250)
+    device["packet_override"]  = random.randint(80, 140)
     device["signal_override"]  = 95
     print(f"[ANOMALY] Traffic spike injected on {device['device_id']}")
     return device["device_id"]
@@ -163,12 +163,12 @@ def apply_flap_state(tick_counter):
 # ─────────────────────────────────────────────
 
 def ddos_attack(devices):
-    victims = random.sample(devices, min(3, len(devices)))
+    victims = random.sample(devices, min(2, len(devices)))
 
     for d in victims:
         _active_attacks[d["device_id"]] = {
             "type": "ddos",
-            "remaining": 6
+            "remaining": 3
         }
 
     print(f"[ANOMALY] DDoS attack started on {[d['device_id'] for d in victims]}")
@@ -187,7 +187,7 @@ def apply_active_attacks(devices):
             if d["device_id"] == dev_id:
 
                 if attack["type"] == "ddos":
-                    d["traffic_override"] = d.get("last_traffic", 50) * 3
+                    d["traffic_override"] = d.get("last_traffic", 50) * 1.5
                     d["packet_override"] = 200
 
                 attack["remaining"] -= 1

@@ -201,7 +201,7 @@ def page_topology():
             "severity":str(row.get("severity","none")),
             "explanation":str(row.get("explanation",""))[:130],
         })
-    topo_edges=[{"from":e["source"],"to":e["target"]} for e in topo["links"]]
+    topo_edges=[{"from":e["source"],"to":e["target"]} for e in topo["edges"]]
     nodes_json=json.dumps(topo_nodes)
     edges_json=json.dumps(topo_edges)
 

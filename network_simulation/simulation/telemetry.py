@@ -97,20 +97,25 @@ def generate_telemetry(devices, connections):
         snmp_value = traffic * 1024
 
         row = {
-            "timestamp":    int(time.time()),
-            "device_id":    d["device_id"],
-            "mac":          d["mac"],
-            "type":         d.get("type", "unknown"),
-            "connected_to": connections.get(d["device_id"], "unknown"),
-            "traffic":      traffic,
-            "packet_rate":  packet_rate,
-            "signal":       signal,
-            "status":       status,
-            "mac_changed":  mac_changed,
-            "flap_count":   flap_count,
-            "snmp_oid":     SNMP_OID_IN_OCTETS,
-            "snmp_value":   snmp_value,
-            "syslog_msg":   _syslog(d["device_id"], status, traffic, mac_changed),
+            "timestamp": int(time.time()),
+            "device_id": d["device_id"],
+            "mac": str(d["mac"]),
+            "type": str(d.get("type", "unknown")),
+            "connected_to": str(connections.get(d["device_id"], "unknown")),
+
+            # FORCE NUMERIC TYPES
+            "traffic": int(traffic),
+            "packet_rate": int(packet_rate),
+            "signal": int(signal),
+
+            "status": str(status),
+
+            "mac_changed": int(mac_changed),
+            "flap_count": int(flap_count),
+
+            "snmp_oid": str(SNMP_OID_IN_OCTETS),
+            "snmp_value": int(snmp_value),
+            "syslog_msg": str(_syslog(d["device_id"], status, traffic, mac_changed)),
         }
 
         data.append(row)

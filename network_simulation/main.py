@@ -89,7 +89,7 @@ print("[INFO] Model trained ✓\n")
 # REAL-TIME LOOP
 # ════════════════════════════════════════════════════════
 
-next_anomaly_time = time.time() + random.randint(15, 25)
+next_anomaly_time = time.time() + random.randint(45, 60)
 
 tick = 0
 anomaly_count = 0
@@ -174,7 +174,7 @@ try:
                 last_anomaly = f"ddos on {victims}"
 
             anomaly_count += 1
-            next_anomaly_time = time.time() + random.randint(20, 30)
+            next_anomaly_time = time.time() + random.randint(45, 60)
 
         time.sleep(1)
 
