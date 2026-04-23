@@ -46,8 +46,18 @@ html,body,[class*="css"]{font-family:'Rajdhani',sans-serif;background:#030712;co
 </style>
 """, unsafe_allow_html=True)
 
-for k,v in {"logged_in":False,"page":"login","sel_net":None,"sel_dev":None}.items():
+API_URL = "https://h2h-oopsops-ins-system.onrender.com"
+
+for k,v in {"logged_in":False,"page":"login","sel_net":None,"sel_dev":None,"sim_reset":False}.items():
     if k not in st.session_state: st.session_state[k]=v
+
+# Reset simulation once per browser session so charts start fresh on every page load
+if not st.session_state.sim_reset:
+    try:
+        requests.post(f"{API_URL}/reset", timeout=8)
+    except Exception:
+        pass
+    st.session_state.sim_reset = True
 
 NETWORKS=[
     {"id":"net_a","name":"Campus Network A","location":"Building 1 — Floor 2","aps":3,"switches":2},
@@ -59,9 +69,7 @@ SS={"critical":"ac","high":"ah","medium":"am","low":"al"}
 
 def load_csv():
     try:
-        API_URL = "https://h2h-oopsops-ins-system.onrender.com/data"
-
-        res = requests.get(API_URL, timeout=5)
+        res = requests.get(f"{API_URL}/data", timeout=5)
         data = res.json()
 
         df = pd.DataFrame(data)
@@ -87,7 +95,12 @@ def load_csv():
 
 @st.cache_resource
 def get_detector():
-    df= load_csv(); det=AnomalyDetector(contamination=0.1); det.train(df); return det
+    df = load_csv()
+    if df.empty or len(df) < 10:
+        return None
+    det = AnomalyDetector(contamination=0.1)
+    det.train(df)
+    return det
 
 @st.cache_data(ttl=60)
 def load_topo():
@@ -101,8 +114,15 @@ def load_status():
 def get_results():
     try:
         df=load_csv()
+        if df.empty:
+            st.warning("⏳ No data yet — simulation is warming up on the backend. This page will auto-refresh.")
+            st.stop()
         latest=df.sort_values("timestamp").groupby("device_id").last().reset_index()
-        return get_detector().predict(latest), df
+        det = get_detector()
+        if det is None:
+            st.warning("⏳ ML model not ready yet — waiting for enough data.")
+            st.stop()
+        return det.predict(latest), df
     except Exception as e:
         st.error(f"Data error: {e}"); st.stop()
 
@@ -656,29 +676,35 @@ def page_details():
     with tab1:
         st.markdown("#### Traffic & Signal Over Time")
         sel_dev_ts=st.selectbox("Filter by device",["ALL"]+sorted(df["device_id"].unique().tolist()),key="ts_dev")
-        plot_df=(df if sel_dev_ts=="ALL" else df[df["device_id"]==sel_dev_ts]).copy()
-        plot_df["time"] = pd.to_datetime(plot_df["timestamp"], unit="s")
 
-        # IMPORTANT FIX: group by time
-        plot_df = plot_df.sort_values("time")
+        # Build plot_df: per-device keeps raw rows; ALL averages across devices per timestamp
+        if sel_dev_ts == "ALL":
+            plot_df = df.copy()
+            plot_df["time"] = pd.to_datetime(plot_df["timestamp"], unit="s")
+            plot_df = plot_df.groupby("time", as_index=False).agg({"traffic":"mean","signal":"mean"})
+            plot_df = plot_df.sort_values("time")
+            color_enc = {}
+        else:
+            plot_df = df[df["device_id"]==sel_dev_ts].copy()
+            plot_df["time"] = pd.to_datetime(plot_df["timestamp"], unit="s")
+            plot_df = plot_df.sort_values("time")
+            color_enc = {}
 
-        plot_df = plot_df.groupby("time", as_index=False).agg({
-            "traffic": "mean",
-            "signal": "mean"
-        })
-        if not plot_df.empty:
+        if len(plot_df) < 2:
+            st.info("⏳ Waiting for simulation data — the backend may be warming up. Check back in ~30 seconds.")
+        else:
             st.markdown("**Traffic (pkts/s)**")
             tc=alt.Chart(plot_df).mark_line(color="#00ff88",strokeWidth=1.5,opacity=0.85).encode(
                 x=alt.X("time:T",title="Time",axis=alt.Axis(labelColor="#475569",titleColor="#475569")),
                 y=alt.Y("traffic:Q",title="pkts/s",axis=alt.Axis(labelColor="#475569",titleColor="#475569")),
-                tooltip=["traffic","time:T"]
+                tooltip=["traffic:Q","time:T"]
             ).properties(height=180).configure_view(strokeOpacity=0).configure_axis(gridColor="#1e293b",domainColor="#1e293b")
             st.altair_chart(tc,use_container_width=True)
 
             st.markdown("**Signal Strength (dBm)**")
             sc3=alt.Chart(plot_df).mark_line(color="#00d4ff",strokeWidth=1.5,opacity=0.85).encode(
                 x=alt.X("time:T",title="Time"),y=alt.Y("signal:Q",title="dBm"),
-                tooltip=["signal","time:T"]
+                tooltip=["signal:Q","time:T"]
             ).properties(height=180).configure_view(strokeOpacity=0).configure_axis(gridColor="#1e293b",domainColor="#1e293b")
             st.altair_chart(sc3,use_container_width=True)
 
@@ -690,11 +716,12 @@ def page_details():
             anom_ts["flagged"]=(anom_ts["traffic"]>mean_t*2).astype(int)
             anom_agg=anom_ts.groupby("time")["flagged"].sum().reset_index()
             anom_agg.columns=["time","anomaly_count"]
-            ac=alt.Chart(anom_agg).mark_area(color="#ef4444",opacity=0.4,line={"color":"#ef4444","strokeWidth":1.5}).encode(
-                x=alt.X("time:T",title="Time"),y=alt.Y("anomaly_count:Q",title="Count"),
-                tooltip=["time:T","anomaly_count"]
-            ).properties(height=160).configure_view(strokeOpacity=0).configure_axis(gridColor="#1e293b",domainColor="#1e293b")
-            st.altair_chart(ac,use_container_width=True)
+            if len(anom_agg) >= 2:
+                ac=alt.Chart(anom_agg).mark_area(color="#ef4444",opacity=0.4,line={"color":"#ef4444","strokeWidth":1.5}).encode(
+                    x=alt.X("time:T",title="Time"),y=alt.Y("anomaly_count:Q",title="Count"),
+                    tooltip=["time:T","anomaly_count:Q"]
+                ).properties(height=160).configure_view(strokeOpacity=0).configure_axis(gridColor="#1e293b",domainColor="#1e293b")
+                st.altair_chart(ac,use_container_width=True)
 
     with tab2:
         st.markdown("#### Anomaly Distribution")
