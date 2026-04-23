@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import json, os, sys, time
+import altair as alt
 
 # ── Path setup ────────────────────────────────────────────────────────────────
 ROOT        = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -11,7 +12,8 @@ sys.path.insert(0, ROOT)
 
 from ml_model.model import AnomalyDetector
 
-st.set_page_config(page_title="INS-System", page_icon="🛡️", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="INS-System", page_icon="🛡️", layout="wide",
+                   initial_sidebar_state="collapsed")
 
 st.markdown("""
 <style>
@@ -41,7 +43,6 @@ html,body,[class*="css"]{font-family:'Rajdhani',sans-serif;background:#030712;co
 </style>
 """, unsafe_allow_html=True)
 
-# ── Session state ─────────────────────────────────────────────────────────────
 for k,v in {"logged_in":False,"page":"login","sel_net":None,"sel_dev":None}.items():
     if k not in st.session_state: st.session_state[k]=v
 
@@ -53,13 +54,24 @@ NETWORKS=[
 SC={"critical":"#ef4444","high":"#f97316","medium":"#eab308","low":"#06b6d4","none":"#00ff88"}
 SS={"critical":"ac","high":"ah","medium":"am","low":"al"}
 
-# ── Data ──────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=3)
-def load_csv(): return pd.read_csv(CSV_PATH)
+def load_csv():
+    df = pd.read_csv(CSV_PATH)
+
+    # ✅ Fix data types
+    df["traffic"] = pd.to_numeric(df["traffic"], errors="coerce")
+    df["signal"] = pd.to_numeric(df["signal"], errors="coerce")
+    df["packet_rate"] = pd.to_numeric(df["packet_rate"], errors="coerce")
+    df["timestamp"] = pd.to_numeric(df["timestamp"], errors="coerce")
+
+    # remove bad rows (optional but safe)
+    df = df.dropna()
+
+    return df
 
 @st.cache_resource
 def get_detector():
-    df=pd.read_csv(CSV_PATH); det=AnomalyDetector(contamination=0.1); det.train(df); return det
+    df= load_csv(); det=AnomalyDetector(contamination=0.1); det.train(df); return det
 
 @st.cache_data(ttl=60)
 def load_topo():
@@ -96,14 +108,13 @@ def page_login():
             if username=="admin" and password=="admin":
                 st.session_state.logged_in=True; st.session_state.page="dashboard"; st.rerun()
             else: st.error("Invalid credentials — use admin / admin")
-        st.markdown('</div>', unsafe_allow_html=True)
         st.markdown('<p style="text-align:center;font-size:12px;color:#334155;margin-top:1rem;">Hack2Hire 1.0 · Team OopsOps</p>', unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # DASHBOARD
 # ══════════════════════════════════════════════════════════════════════════════
 def page_dashboard():
-    results,_=get_results(); status=load_status()
+    results,df=get_results(); status=load_status()
     anoms=results[results["is_anomaly"]]; n,na=len(results),len(anoms)
     st.markdown(f"""<div class="ph"><h1>🛡️ INSS Dashboard</h1><span class="tag">LIVE</span>
       <span style="margin-left:auto;font-family:'JetBrains Mono',monospace;font-size:12px;color:#475569;">
@@ -153,83 +164,81 @@ def page_dashboard():
     if st.checkbox("Auto-refresh (3s)",key="dash_auto"): time.sleep(3); st.rerun()
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TOPOLOGY  — reads topology.json directly for reliable graph
+# TOPOLOGY — circular layout, 3 view modes, coloured animated wires
 # ══════════════════════════════════════════════════════════════════════════════
 def page_topology():
     results,_=get_results(); topo=load_topo(); status_obj=load_status()
     anoms=results[results["is_anomaly"]]; anom_ids=set(anoms["device_id"].tolist())
     net=st.session_state.sel_net or NETWORKS[0]
-
     st.markdown(f"""<div class="ph"><h1>📡 {net['name']}</h1>
       <span class="tag">{net['location']}</span></div>""",unsafe_allow_html=True)
     c1,c2,_=st.columns([1,1,4])
     with c1:
         if st.button("← Dashboard"): st.session_state.page="dashboard"; st.rerun()
     with c2:
-        if st.button("Details & Filters"): st.session_state.page="details"; st.rerun()
+        if st.button("Analytics →"): st.session_state.page="details"; st.rerun()
 
-    # Build enriched node list from topology.json
     res_lkp={r["device_id"]:r for r in results.to_dict("records")}
     lbl_map={"camera":"CAM","thermostat":"THERM","phone":"PHONE","smart_light":"LIGHT",
               "sensor":"SENS","switch":"SW","access_point":"AP","unknown":"UNK"}
-
     topo_nodes=[]
     for n in topo["nodes"]:
         nid=n["id"]; ntype=n.get("type","device")
         row=res_lkp.get(nid,{})
         faulty=(nid in anom_ids) or int(row.get("mac_changed",0))==1 or str(row.get("status","active"))=="offline"
-        is_rogue=str(row.get("mac","")).startswith("RG:")
-
         if ntype=="switch":         color,border="rgb(100,160,255)","rgb(60,120,220)"
-        elif ntype=="access_point": color,border="rgb(255,215,0)",  "rgb(200,160,0)"
-        elif faulty:                color,border="rgb(255,30,30)",  "rgb(200,20,20)"
-        else:                       color,border="rgb(0,255,80)",   "rgb(0,180,55)"
-
+        elif ntype=="access_point": color,border="rgb(255,200,0)",  "rgb(200,150,0)"
+        elif faulty:                color,border="rgb(255,40,40)",  "rgb(200,20,20)"
+        else:                       color,border="rgb(0,255,120)",  "rgb(0,180,80)"
         topo_nodes.append({
             "id":nid,"type":ntype,"color":color,"border":border,
             "label":lbl_map.get(ntype,ntype[:4].upper()),
-            "is_anomaly":faulty,"is_rogue":is_rogue,
+            "is_anomaly":faulty,
             "traffic":int(row.get("traffic",0)),"signal":int(row.get("signal",0)),
             "packet_rate":int(row.get("packet_rate",0)),
             "status":str(row.get("status","—")),"mac":str(row.get("mac","—")),
             "anomaly_type":str(row.get("anomaly_type","normal")),
             "severity":str(row.get("severity","none")),
-            "explanation":str(row.get("explanation",""))[:120],
+            "explanation":str(row.get("explanation",""))[:130],
         })
-
-    # Edges use "source"/"target" from NetworkX json_graph export
-    topo_edges=[{"from":e["source"],"to":e["target"]} for e in topo["edges"]]
-
+    topo_edges=[{"from":e["source"],"to":e["target"]} for e in topo["links"]]
     nodes_json=json.dumps(topo_nodes)
     edges_json=json.dumps(topo_edges)
 
     col_canvas,col_panel=st.columns([3,1])
-
     with col_canvas:
         import streamlit.components.v1 as components
-        html=f"""<!DOCTYPE html>
-<html><head><style>
+        html=f"""<!DOCTYPE html><html><head><style>
 *{{margin:0;padding:0;box-sizing:border-box;}}
-body{{background:#030712;overflow:hidden;}}
-#wrap{{width:100%;height:400px;position:relative;}}
+body{{background:#030712;overflow:hidden;font-family:'JetBrains Mono',monospace;}}
+#wrap{{width:100%;height:560px;position:relative;}}
 canvas{{position:absolute;top:0;left:0;width:100%;height:100%;}}
 #tip{{position:absolute;display:none;pointer-events:none;z-index:20;
-  background:rgba(10,15,30,0.97);border:1px solid #1e293b;border-radius:8px;
-  padding:10px 14px;font-family:'JetBrains Mono',monospace;font-size:11px;
-  color:#e2e8f0;min-width:190px;line-height:1.9;box-shadow:0 4px 24px rgba(0,0,0,.8);}}
-#leg{{position:absolute;bottom:10px;left:12px;display:flex;gap:14px;}}
-.lg{{display:flex;align-items:center;gap:5px;font-size:11px;color:#64748b;}}
+  background:rgba(8,12,24,0.97);border:1px solid #1e3a5f;border-radius:10px;
+  padding:12px 16px;font-size:11px;color:#e2e8f0;min-width:210px;
+  line-height:2;box-shadow:0 4px 32px rgba(0,150,255,.15);}}
+#leg{{position:absolute;bottom:12px;left:14px;display:flex;gap:16px;flex-wrap:wrap;}}
+.lg{{display:flex;align-items:center;gap:6px;font-size:10px;color:#475569;}}
 .ld{{width:10px;height:10px;border-radius:50%;flex-shrink:0;}}
+#mode{{position:absolute;top:10px;right:12px;display:flex;gap:6px;}}
+.mb{{background:#0d1424;border:1px solid #1e293b;color:#64748b;padding:4px 10px;
+  border-radius:5px;font-size:10px;cursor:pointer;font-family:monospace;}}
+.mb.active,.mb:hover{{border-color:#00ff88;color:#00ff88;}}
 </style></head>
 <body><div id="wrap">
 <canvas id="c"></canvas>
 <div id="tip"></div>
+<div id="mode">
+  <button class="mb active" id="mb-circular" onclick="setMode('circular',this)">CIRCULAR</button>
+  <button class="mb" id="mb-hierarchy" onclick="setMode('hierarchy',this)">HIERARCHY</button>
+  <button class="mb" id="mb-force" onclick="setMode('force',this)">FORCE</button>
+</div>
 <div id="leg">
-  <div class="lg"><div class="ld" style="background:rgb(0,255,80)"></div>Normal</div>
-  <div class="lg"><div class="ld" style="background:rgb(255,30,30)"></div>Anomaly</div>
-  <div class="lg"><div class="ld" style="background:rgb(255,215,0)"></div>Access Point</div>
+  <div class="lg"><div class="ld" style="background:rgb(0,255,120)"></div>Normal</div>
+  <div class="lg"><div class="ld" style="background:rgb(255,40,40)"></div>Anomaly</div>
+  <div class="lg"><div class="ld" style="background:rgb(255,200,0)"></div>Access Point</div>
   <div class="lg"><div class="ld" style="background:rgb(100,160,255)"></div>Switch</div>
-  <div class="lg"><div class="ld" style="background:white"></div>Packets</div>
+  <div class="lg"><div class="ld" style="background:rgba(255,255,255,0.8)"></div>Packets</div>
 </div>
 </div>
 <script>
@@ -239,196 +248,240 @@ const wrap=document.getElementById('wrap');
 const cv=document.getElementById('c');
 const ctx=cv.getContext('2d');
 const tip=document.getElementById('tip');
+let layoutMode='circular';
 
 function resize(){{cv.width=wrap.offsetWidth;cv.height=wrap.offsetHeight;}}
 resize();
-window.addEventListener('resize',()=>{{resize();layout();}});
+window.addEventListener('resize',()=>{{resize();applyLayout();}});
 
-/* ── Hierarchical layout ── */
 const pos={{}};
-function layout(){{
+const vel={{}};
+
+function circularLayout(){{
+  const W=cv.width,H=cv.height,cx=W/2,cy=H/2;
+  const switches=NODES.filter(n=>n.type==='switch');
+  const aps=NODES.filter(n=>n.type==='access_point');
+  const devs=NODES.filter(n=>n.type!=='switch'&&n.type!=='access_point');
+  switches.forEach((n,i)=>{{
+    const a=(2*Math.PI*i/Math.max(switches.length,1))-Math.PI/2;
+    pos[n.id]={{x:cx+70*Math.cos(a),y:cy+60*Math.sin(a)}};vel[n.id]={{x:0,y:0}};
+  }});
+  aps.forEach((n,i)=>{{
+    const a=(2*Math.PI*i/Math.max(aps.length,1))-Math.PI/2;
+    pos[n.id]={{x:cx+185*Math.cos(a),y:cy+165*Math.sin(a)}};vel[n.id]={{x:0,y:0}};
+  }});
+  const apKids={{}};aps.forEach(ap=>apKids[ap.id]=[]);
+  devs.forEach(d=>{{
+    let found=false;
+    for(const e of EDGES){{
+      if(e.from===d.id&&apKids[e.to]!==undefined){{apKids[e.to].push(d.id);found=true;break;}}
+      if(e.to===d.id&&apKids[e.from]!==undefined){{apKids[e.from].push(d.id);found=true;break;}}
+    }}
+    if(!found&&aps.length>0)apKids[aps[0].id].push(d.id);
+  }});
+  aps.forEach(ap=>{{
+    const kids=apKids[ap.id]||[];
+    const baseAngle=Math.atan2(pos[ap.id].y-cy,pos[ap.id].x-cx);
+    const spread=kids.length>1?0.55:0;
+    kids.forEach((did,i)=>{{
+      const t=kids.length>1?i/(kids.length-1):0.5;
+      const a=baseAngle-spread/2+spread*t;
+      pos[did]={{x:cx+315*Math.cos(a),y:cy+280*Math.sin(a)}};vel[did]={{x:0,y:0}};
+    }});
+  }});
+}}
+
+function hierarchyLayout(){{
   const W=cv.width,H=cv.height;
   const switches=NODES.filter(n=>n.type==='switch');
   const aps=NODES.filter(n=>n.type==='access_point');
   const devs=NODES.filter(n=>n.type!=='switch'&&n.type!=='access_point');
-
-  /* Row 1: switches */
-  switches.forEach((n,i)=>{{
-    pos[n.id]={{x:W/2+(i-(switches.length-1)/2)*170,y:H*0.14}};
-  }});
-
-  /* Row 2: APs */
-  aps.forEach((n,i)=>{{
-    pos[n.id]={{x:W*0.12+(W*0.76)*i/Math.max(aps.length-1,1),y:H*0.42}};
-  }});
-
-  /* Row 3: devices grouped under their parent AP */
-  const apKids={{}};
-  aps.forEach(ap=>apKids[ap.id]=[]);
+  switches.forEach((n,i)=>{{pos[n.id]={{x:W/2+(i-(switches.length-1)/2)*170,y:H*0.13}};vel[n.id]={{x:0,y:0}};}});
+  aps.forEach((n,i)=>{{pos[n.id]={{x:W*0.12+(W*0.76)*i/Math.max(aps.length-1,1),y:H*0.42}};vel[n.id]={{x:0,y:0}};}});
+  const apKids={{}};aps.forEach(ap=>apKids[ap.id]=[]);
   devs.forEach(d=>{{
     let found=false;
     for(const e of EDGES){{
-      if((e.from===d.id&&apKids[e.to]!==undefined)){{apKids[e.to].push(d.id);found=true;break;}}
-      if((e.to===d.id&&apKids[e.from]!==undefined)){{apKids[e.from].push(d.id);found=true;break;}}
+      if(e.from===d.id&&apKids[e.to]!==undefined){{apKids[e.to].push(d.id);found=true;break;}}
+      if(e.to===d.id&&apKids[e.from]!==undefined){{apKids[e.from].push(d.id);found=true;break;}}
     }}
-    if(!found){{const first=aps[0];if(first)apKids[first.id].push(d.id);}}
+    if(!found&&aps.length>0)apKids[aps[0].id].push(d.id);
   }});
-
   aps.forEach(ap=>{{
-    const kids=apKids[ap.id]||[];
-    const apX=pos[ap.id].x;
+    const kids=apKids[ap.id]||[];const apX=pos[ap.id].x;
     const spread=Math.min(kids.length*58,W*0.38);
     kids.forEach((did,i)=>{{
       const xOff=kids.length>1?-spread/2+spread*i/(kids.length-1):0;
-      pos[did]={{x:apX+xOff,y:H*0.76+(i%2)*28}};
+      pos[did]={{x:apX+xOff,y:H*0.76+(i%2)*28}};vel[did]={{x:0,y:0}};
     }});
   }});
 }}
-layout();
 
-/* ── Particles ── */
+function forceInit(){{
+  NODES.forEach((n,i)=>{{
+    if(!pos[n.id])pos[n.id]={{x:cv.width/2+Math.cos(2*Math.PI*i/NODES.length)*200,y:cv.height/2+Math.sin(2*Math.PI*i/NODES.length)*200}};
+    vel[n.id]={{x:0,y:0}};
+  }});
+}}
+
+function applyLayout(){{
+  if(layoutMode==='circular')circularLayout();
+  else if(layoutMode==='hierarchy')hierarchyLayout();
+  else forceInit();
+}}
+applyLayout();
+
+function setMode(m,btn){{
+  layoutMode=m;
+  document.querySelectorAll('.mb').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  applyLayout();
+}}
+
+let simSteps=0;
+function simulate(){{
+  if(layoutMode!=='force')return;
+  const k=60,rep=5000,damp=0.82;
+  NODES.forEach(a=>{{
+    let fx=0,fy=0;
+    NODES.forEach(b=>{{
+      if(a.id===b.id)return;
+      const dx=pos[a.id].x-pos[b.id].x,dy=pos[a.id].y-pos[b.id].y;
+      const d=Math.max(Math.sqrt(dx*dx+dy*dy),1);
+      fx+=rep*dx/(d*d*d);fy+=rep*dy/(d*d*d);
+    }});
+    EDGES.forEach(e=>{{
+      let oid=e.from===a.id?e.to:e.to===a.id?e.from:null;
+      if(!oid||!pos[oid])return;
+      const dx=pos[oid].x-pos[a.id].x,dy=pos[oid].y-pos[a.id].y;
+      const d=Math.max(Math.sqrt(dx*dx+dy*dy),1);
+      fx+=k*(d-130)*dx/d;fy+=k*(d-130)*dy/d;
+    }});
+    fx+=(cv.width/2-pos[a.id].x)*0.015;fy+=(cv.height/2-pos[a.id].y)*0.015;
+    vel[a.id].x=(vel[a.id].x+fx*0.016)*damp;
+    vel[a.id].y=(vel[a.id].y+fy*0.016)*damp;
+    pos[a.id].x+=vel[a.id].x;pos[a.id].y+=vel[a.id].y;
+  }});
+}}
+
 const parts=[];
 function spawnParts(){{
-  if(Math.random()>0.3)return;
+  if(Math.random()>0.35||!EDGES.length)return;
   const e=EDGES[Math.floor(Math.random()*EDGES.length)];
   if(!pos[e.from]||!pos[e.to])return;
-  const rev=Math.random()>0.5;
-  parts.push({{
-    from:rev?e.to:e.from,to:rev?e.from:e.to,
-    t:0,speed:0.009+Math.random()*0.011,sz:1.8+Math.random()*2.2
-  }});
-}}
-function tickParts(){{
-  for(let i=parts.length-1;i>=0;i--){{
-    parts[i].t+=parts[i].speed;
-    if(parts[i].t>=1)parts.splice(i,1);
+  const fn=NODES.find(n=>n.id===e.from);
+  const tn=NODES.find(n=>n.id===e.to);
+  const alert=fn?.is_anomaly||tn?.is_anomaly;
+  const count=alert?3:1;
+  for(let i=0;i<count;i++){{
+    const rev=Math.random()>0.5;
+    parts.push({{
+      from:rev?e.to:e.from,to:rev?e.from:e.to,
+      t:Math.random()*0.2,speed:0.008+Math.random()*0.013,
+      sz:alert?2.8+Math.random()*1.5:1.5+Math.random()*2,
+      color:alert?'rgba(255,80,80,0.95)':'rgba(255,255,255,0.9)',
+      glow:alert?'#ff4040':'#ffffff'
+    }});
   }}
 }}
+function tickParts(){{for(let i=parts.length-1;i>=0;i--){{parts[i].t+=parts[i].speed;if(parts[i].t>=1)parts.splice(i,1);}}}}
 function drawParts(){{
   parts.forEach(p=>{{
-    const a=pos[p.from],b=pos[p.to];
-    if(!a||!b)return;
+    const a=pos[p.from],b=pos[p.to];if(!a||!b)return;
     const x=a.x+(b.x-a.x)*p.t,y=a.y+(b.y-a.y)*p.t;
-    const alpha=p.t<0.12?p.t/0.12:p.t>0.85?(1-p.t)/0.15:1;
-    ctx.save();
-    ctx.globalAlpha=alpha*0.95;
-    ctx.shadowBlur=8;ctx.shadowColor='#ffffff';
+    const alpha=p.t<0.1?p.t/0.1:p.t>0.88?(1-p.t)/0.12:1;
+    ctx.save();ctx.globalAlpha=alpha;
+    ctx.shadowBlur=p.sz*4;ctx.shadowColor=p.glow;
     ctx.beginPath();ctx.arc(x,y,p.sz,0,2*Math.PI);
-    ctx.fillStyle='rgba(255,255,255,0.95)';ctx.fill();
-    ctx.restore();
+    ctx.fillStyle=p.color;ctx.fill();ctx.restore();
   }});
 }}
 
-/* ── Node radius ── */
-function nr(n){{
-  if(n.type==='switch')return 26;
-  if(n.type==='access_point')return 22;
-  return 16;
-}}
+function nr(n){{return n.type==='switch'?28:n.type==='access_point'?24:18;}}
 
-/* ── Draw ── */
 function draw(){{
   ctx.clearRect(0,0,cv.width,cv.height);
+  ctx.strokeStyle='rgba(30,41,59,0.22)';ctx.lineWidth=1;
+  for(let x=0;x<cv.width;x+=44){{ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,cv.height);ctx.stroke();}}
+  for(let y=0;y<cv.height;y+=44){{ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(cv.width,y);ctx.stroke();}}
 
-  /* grid */
-  ctx.strokeStyle='rgba(30,41,59,0.3)';ctx.lineWidth=1;
-  for(let x=0;x<cv.width;x+=42){{ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,cv.height);ctx.stroke();}}
-  for(let y=0;y<cv.height;y+=42){{ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(cv.width,y);ctx.stroke();}}
-
-  /* edges */
   EDGES.forEach(e=>{{
-    const a=pos[e.from],b=pos[e.to];
-    if(!a||!b)return;
+    const a=pos[e.from],b=pos[e.to];if(!a||!b)return;
     const fn=NODES.find(n=>n.id===e.from),tn=NODES.find(n=>n.id===e.to);
     const alert=fn?.is_anomaly||tn?.is_anomaly;
+    const isAPSW=(fn?.type==='access_point'&&tn?.type==='switch')||(tn?.type==='access_point'&&fn?.type==='switch');
+    // Glow
     ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);
-    ctx.strokeStyle=alert?'rgba(255,40,40,0.45)':'rgba(0,180,60,0.28)';
-    ctx.lineWidth=alert?1.5:1;
-    if(alert)ctx.setLineDash([5,4]);
+    ctx.strokeStyle=alert?'rgba(255,40,40,0.12)':isAPSW?'rgba(100,160,255,0.10)':'rgba(0,255,100,0.07)';
+    ctx.lineWidth=8;ctx.shadowBlur=alert?14:0;ctx.shadowColor='rgba(255,40,40,0.35)';
+    ctx.stroke();ctx.shadowBlur=0;
+    // Core wire
+    ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);
+    ctx.strokeStyle=alert?'rgba(255,60,60,0.65)':isAPSW?'rgba(100,160,255,0.45)':'rgba(0,220,80,0.28)';
+    ctx.lineWidth=alert?2:1.5;
+    if(alert)ctx.setLineDash([6,4]);else ctx.setLineDash([]);
     ctx.stroke();ctx.setLineDash([]);
   }});
 
-  /* particles */
   drawParts();
 
-  /* nodes */
   NODES.forEach(n=>{{
-    const p=pos[n.id];
-    if(!p)return;
+    const p=pos[n.id];if(!p)return;
     const r=nr(n);
-
-    /* pulse ring for anomalies */
     if(n.is_anomaly){{
-      const pulse=(Date.now()%1300)/1300;
-      ctx.beginPath();ctx.arc(p.x,p.y,r+5+pulse*16,0,2*Math.PI);
-      ctx.strokeStyle=`rgba(255,30,30,${{(0.75*(1-pulse)).toFixed(2)}})`;
-      ctx.lineWidth=2;ctx.stroke();
+      const pulse=(Date.now()%1400)/1400;
+      ctx.beginPath();ctx.arc(p.x,p.y,r+6+pulse*18,0,2*Math.PI);
+      ctx.strokeStyle=`rgba(255,40,40,${{(0.8*(1-pulse)).toFixed(2)}})`;
+      ctx.lineWidth=2.5;ctx.stroke();
     }}
-
-    /* glow halo */
-    const g=ctx.createRadialGradient(p.x,p.y,0,p.x,p.y,r+12);
-    g.addColorStop(0,n.color.replace('rgb','rgba').replace(')',',0.2)'));
+    const g=ctx.createRadialGradient(p.x,p.y,0,p.x,p.y,r+14);
+    g.addColorStop(0,n.color.replace('rgb','rgba').replace(')',',0.18)'));
     g.addColorStop(1,'rgba(0,0,0,0)');
-    ctx.beginPath();ctx.arc(p.x,p.y,r+12,0,2*Math.PI);
-    ctx.fillStyle=g;ctx.fill();
-
-    /* circle body */
+    ctx.beginPath();ctx.arc(p.x,p.y,r+14,0,2*Math.PI);ctx.fillStyle=g;ctx.fill();
     ctx.beginPath();ctx.arc(p.x,p.y,r,0,2*Math.PI);
-    ctx.fillStyle=n.color.replace('rgb','rgba').replace(')',',0.16)');
-    ctx.strokeStyle=n.border;ctx.lineWidth=2.5;
-    ctx.fill();ctx.stroke();
-
-    /* bright centre dot */
-    ctx.beginPath();ctx.arc(p.x,p.y,r*0.3,0,2*Math.PI);
-    ctx.fillStyle=n.color;ctx.fill();
-
-    /* label text */
-    ctx.font=`bold ${{n.type==='switch'?11:10}}px monospace`;
+    ctx.fillStyle=n.color.replace('rgb','rgba').replace(')',',0.14)');
+    ctx.strokeStyle=n.border;ctx.lineWidth=2.5;ctx.fill();ctx.stroke();
+    ctx.beginPath();ctx.arc(p.x,p.y,r*0.32,0,2*Math.PI);ctx.fillStyle=n.color;ctx.fill();
+    ctx.font=`bold ${{n.type==='switch'?12:10}}px monospace`;
     ctx.fillStyle='#f1f5f9';ctx.textAlign='center';ctx.textBaseline='middle';
     ctx.fillText(n.label,p.x,p.y);
-
-    /* id below */
     ctx.font='9px monospace';
-    ctx.fillStyle=n.is_anomaly?'rgba(255,80,80,0.85)':'#475569';
-    ctx.fillText(n.id,p.x,p.y+r+11);
+    ctx.fillStyle=n.is_anomaly?'rgba(255,90,90,0.9)':'#334155';
+    ctx.fillText(n.id,p.x,p.y+r+12);
   }});
 }}
 
-/* ── Tooltip ── */
 let hov=null;
-canvas=cv; // alias
 cv.addEventListener('mousemove',ev=>{{
   const rc=cv.getBoundingClientRect();
   const mx=(ev.clientX-rc.left)*(cv.width/rc.width);
   const my=(ev.clientY-rc.top)*(cv.height/rc.height);
   hov=null;
-  NODES.forEach(n=>{{
-    const p=pos[n.id];if(!p)return;
-    const dx=p.x-mx,dy=p.y-my;
-    if(Math.sqrt(dx*dx+dy*dy)<nr(n)+5)hov=n;
-  }});
+  NODES.forEach(n=>{{const p=pos[n.id];if(!p)return;const dx=p.x-mx,dy=p.y-my;if(Math.sqrt(dx*dx+dy*dy)<nr(n)+6)hov=n;}});
   if(hov){{
     tip.style.display='block';
-    tip.style.left=(ev.clientX+16)+'px';
-    tip.style.top=(ev.clientY-10)+'px';
+    tip.style.left=Math.min(ev.clientX+18,window.innerWidth-230)+'px';
+    tip.style.top=(ev.clientY-14)+'px';
     const c=hov.is_anomaly?'#ef4444':'#00ff88';
-    tip.innerHTML=`<b style="color:#f1f5f9;font-size:12px;">${{hov.id}}</b><br>
-<span style="color:#64748b">type &nbsp;&nbsp;</span><span style="color:#cbd5e1">${{hov.type}}</span><br>
-<span style="color:#64748b">status &nbsp;</span><span style="color:${{c}}">${{hov.status}}</span><br>
-<span style="color:#64748b">traffic</span><span style="color:#cbd5e1"> ${{hov.traffic}} pkts/s</span><br>
-<span style="color:#64748b">signal &nbsp;</span><span style="color:#cbd5e1"> ${{hov.signal}} dBm</span>
-${{hov.is_anomaly?`<br><span style="color:#ef4444;font-weight:600">⚠ ${{hov.anomaly_type.replace(/_/g,' ').toUpperCase()}}</span>`:''}}`;
+    const sc2={{critical:'#ef4444',high:'#f97316',medium:'#eab308',low:'#06b6d4',none:'#00ff88'}};
+    tip.innerHTML=`<b style="color:#f1f5f9;font-size:13px">${{hov.id}}</b><br>
+<span style="color:#475569">type &nbsp;&nbsp;&nbsp;</span><span style="color:#cbd5e1">${{hov.type}}</span><br>
+<span style="color:#475569">status &nbsp;</span><span style="color:${{c}}">${{hov.status}}</span><br>
+<span style="color:#475569">traffic </span><span style="color:#94a3b8">${{hov.traffic}} pkts/s</span><br>
+<span style="color:#475569">signal &nbsp;</span><span style="color:#94a3b8">${{hov.signal}} dBm</span><br>
+<span style="color:#475569">pkt rate</span><span style="color:#94a3b8"> ${{hov.packet_rate}}</span>
+${{hov.is_anomaly?`<br><hr style="border-color:#1e293b;margin:5px 0">
+<span style="color:${{sc2[hov.severity]||'#94a3b8'}};font-weight:700">⚠ ${{hov.anomaly_type.replace(/_/g,' ').toUpperCase()}}</span><br>
+<span style="color:${{sc2[hov.severity]||'#94a3b8'}};font-size:10px">severity: ${{hov.severity}}</span><br>
+<span style="color:#64748b;font-size:10px">${{hov.explanation.substring(0,110)}}</span>`:''}}`;
     cv.style.cursor='pointer';
   }}else{{tip.style.display='none';cv.style.cursor='default';}}
 }});
 cv.addEventListener('mouseleave',()=>tip.style.display='none');
-
-/* ── Animation loop ── */
-(function loop(){{spawnParts();tickParts();draw();requestAnimationFrame(loop);}}());
+(function loop(){{simulate();spawnParts();tickParts();draw();requestAnimationFrame(loop);}}());
 </script></body></html>"""
-        components.html(html, height=600, scrolling=False)
+        components.html(html, height=580, scrolling=False)
 
-    # ── Side panel ───────────────────────────────────────────────────────────
     with col_panel:
         st.markdown("#### Sim Status")
         st.markdown(f"""<div class="icard">
@@ -436,7 +489,6 @@ cv.addEventListener('mouseleave',()=>tip.style.display='none');
           <div style="font-size:12px;color:#64748b;margin-top:4px;">Injected: {status_obj.get('anomaly_count','—')} anomalies</div>
           <div style="font-size:11px;color:#475569;word-break:break-all;">Last: {str(status_obj.get('last_anomaly','—'))[:34]}</div>
         </div>""",unsafe_allow_html=True)
-
         st.markdown("#### Devices")
         for _,row in results.sort_values("is_anomaly",ascending=False).iterrows():
             dev=row["device_id"]; ia=dev in anom_ids
@@ -454,41 +506,117 @@ cv.addEventListener('mouseleave',()=>tip.style.display='none');
                 </div>""",unsafe_allow_html=True)
                 if st.button("Full Details →",key=f"det_{dev}"):
                     st.session_state.sel_dev=dev; st.session_state.page="details"; st.rerun()
-
     if st.checkbox("Auto-refresh (3s)",key="topo_auto"): time.sleep(3); st.rerun()
 
 # ══════════════════════════════════════════════════════════════════════════════
-# DETAILS
+# ANALYTICS — time-series, anomaly distribution, device drilldown
 # ══════════════════════════════════════════════════════════════════════════════
 def page_details():
     results,df=get_results()
-    st.markdown('<div class="ph"><h1>🔬 Anomaly Analysis</h1><span class="tag">FILTER MODE</span></div>',unsafe_allow_html=True)
-    c1,_=st.columns([1,5])
+    st.markdown('<div class="ph"><h1>📊 Analytics & Anomaly Analysis</h1><span class="tag">FILTER MODE</span></div>',unsafe_allow_html=True)
+    c1,c2,_=st.columns([1,1,5])
     with c1:
         if st.button("← Topology"): st.session_state.page="topology"; st.rerun()
+    with c2:
+        if st.button("← Dashboard"): st.session_state.page="dashboard"; st.rerun()
 
-    st.markdown("#### Filters")
-    f1,f2,f3,f4,f5=st.columns(5)
-    with f1: ao=st.checkbox("Anomalies only",value=True)
-    with f2: at_s=st.selectbox("Anomaly type",["ALL"]+sorted(results["anomaly_type"].dropna().unique().tolist()))
-    with f3: sv_s=st.selectbox("Severity",["ALL","critical","high","medium","low","none"])
-    with f4: dt_s=st.selectbox("Device type",["ALL"]+sorted(results["type"].dropna().unique().tolist()))
-    with f5:
-        tmn,tmx=int(results["traffic"].min()),int(results["traffic"].max())
-        thr=st.slider("Min traffic",tmn,max(tmx,1),tmn)
+    tab1,tab2,tab3=st.tabs(["📈 Time Series","🥧 Anomaly Distribution","🔬 Device Drilldown"])
 
-    fil=results.copy()
-    if ao:         fil=fil[fil["is_anomaly"]]
-    if at_s!="ALL":fil=fil[fil["anomaly_type"]==at_s]
-    if sv_s!="ALL":fil=fil[fil["severity"]==sv_s]
-    if dt_s!="ALL":fil=fil[fil["type"]==dt_s]
-    fil=fil[fil["traffic"]>=thr]
+    with tab1:
+        st.markdown("#### Traffic & Signal Over Time")
+        sel_dev_ts=st.selectbox("Filter by device",["ALL"]+sorted(df["device_id"].unique().tolist()),key="ts_dev")
+        plot_df=(df if sel_dev_ts=="ALL" else df[df["device_id"]==sel_dev_ts]).copy()
+        plot_df["time"]=pd.to_datetime(plot_df["timestamp"],unit="s")
+        if not plot_df.empty:
+            st.markdown("**Traffic (pkts/s)**")
+            tc=alt.Chart(plot_df).mark_line(color="#00ff88",strokeWidth=1.5,opacity=0.85).encode(
+                x=alt.X("time:T",title="Time",axis=alt.Axis(labelColor="#475569",titleColor="#475569")),
+                y=alt.Y("traffic:Q",title="pkts/s",axis=alt.Axis(labelColor="#475569",titleColor="#475569")),
+                tooltip=["device_id","traffic","time:T"]
+            ).properties(height=180).configure_view(strokeOpacity=0).configure_axis(gridColor="#1e293b",domainColor="#1e293b")
+            st.altair_chart(tc,use_container_width=True)
 
-    if st.session_state.sel_dev:
-        dev=st.session_state.sel_dev; sel=results[results["device_id"]==dev]
-        if not sel.empty:
-            row=sel.iloc[0]; sv=row.get("severity","none"); c=SC.get(sv,"#00ff88")
-            st.markdown(f"#### Focused — `{dev}`")
+            st.markdown("**Signal Strength (dBm)**")
+            sc3=alt.Chart(plot_df).mark_line(color="#00d4ff",strokeWidth=1.5,opacity=0.85).encode(
+                x=alt.X("time:T",title="Time"),y=alt.Y("signal:Q",title="dBm"),
+                tooltip=["device_id","signal","time:T"]
+            ).properties(height=180).configure_view(strokeOpacity=0).configure_axis(gridColor="#1e293b",domainColor="#1e293b")
+            st.altair_chart(sc3,use_container_width=True)
+
+            st.markdown("**Anomaly Count Over Time (30s buckets)**")
+            anom_ts=df.copy()
+            anom_ts["time"]=pd.to_datetime(anom_ts["timestamp"],unit="s").dt.floor("30s")
+            mean_t=anom_ts["traffic"].mean()
+            anom_ts["flagged"]=(anom_ts["traffic"]>mean_t*2).astype(int)
+            anom_agg=anom_ts.groupby("time")["flagged"].sum().reset_index()
+            anom_agg.columns=["time","anomaly_count"]
+            ac=alt.Chart(anom_agg).mark_area(color="#ef4444",opacity=0.4,line={"color":"#ef4444","strokeWidth":1.5}).encode(
+                x=alt.X("time:T",title="Time"),y=alt.Y("anomaly_count:Q",title="Count"),
+                tooltip=["time:T","anomaly_count"]
+            ).properties(height=160).configure_view(strokeOpacity=0).configure_axis(gridColor="#1e293b",domainColor="#1e293b")
+            st.altair_chart(ac,use_container_width=True)
+
+    with tab2:
+        st.markdown("#### Anomaly Distribution")
+        anoms=results[results["is_anomaly"]]
+        if anoms.empty:
+            st.success("No anomalies detected — all devices normal")
+        else:
+            ch1,ch2=st.columns(2)
+            with ch1:
+                st.markdown("**By Anomaly Type**")
+                tc2=anoms["anomaly_type"].value_counts().reset_index()
+                tc2.columns=["type","count"]
+                bar=alt.Chart(tc2).mark_bar(cornerRadiusTopLeft=4,cornerRadiusTopRight=4).encode(
+                    x=alt.X("type:N",sort="-y",axis=alt.Axis(labelAngle=-30,labelColor="#64748b")),
+                    y=alt.Y("count:Q",axis=alt.Axis(labelColor="#64748b")),
+                    color=alt.Color("type:N",scale=alt.Scale(
+                        domain=["traffic_flood","device_offline","rogue_device","mac_spoof","signal_drop","packet_flood","suspicious_behavior"],
+                        range=["#ef4444","#f97316","#a855f7","#ec4899","#eab308","#06b6d4","#64748b"]
+                    ),legend=None),tooltip=["type","count"]
+                ).properties(height=220).configure_view(strokeOpacity=0).configure_axis(gridColor="#1e293b",domainColor="#1e293b")
+                st.altair_chart(bar,use_container_width=True)
+            with ch2:
+                st.markdown("**By Severity**")
+                sc4=anoms["severity"].value_counts().reset_index()
+                sc4.columns=["severity","count"]
+                sb=alt.Chart(sc4).mark_bar(cornerRadiusTopLeft=4,cornerRadiusTopRight=4).encode(
+                    x=alt.X("severity:N",sort=["critical","high","medium","low"],axis=alt.Axis(labelColor="#64748b")),
+                    y=alt.Y("count:Q",axis=alt.Axis(labelColor="#64748b")),
+                    color=alt.Color("severity:N",scale=alt.Scale(
+                        domain=["critical","high","medium","low"],
+                        range=["#ef4444","#f97316","#eab308","#06b6d4"]
+                    ),legend=None),tooltip=["severity","count"]
+                ).properties(height=220).configure_view(strokeOpacity=0).configure_axis(gridColor="#1e293b",domainColor="#1e293b")
+                st.altair_chart(sb,use_container_width=True)
+
+            st.markdown("#### All Anomalous Devices")
+            for _,row in anoms.iterrows():
+                sv=row.get("severity","low"); c=SC.get(sv,"#06b6d4"); cl=SS.get(sv,"al")
+                at=str(row.get("anomaly_type","?")).replace("_"," ").upper()
+                st.markdown(f"""<div class="ar {cl}">
+                  <div style="width:10px;height:10px;border-radius:50%;background:{c};margin-top:3px;flex-shrink:0;"></div>
+                  <div style="flex:1;">
+                    <b style="font-family:'JetBrains Mono',monospace;font-size:11px;">{row['device_id']}</b>
+                    <span style="color:{c};font-size:11px;font-weight:600;margin-left:10px;">{at}</span>
+                    <span style="font-family:'JetBrains Mono',monospace;font-size:10px;color:#334155;margin-left:6px;">sev:{sv} · conf:{row.get('confidence','?')}</span>
+                    <div style="color:#94a3b8;font-size:12px;margin-top:2px;">{str(row.get('explanation',''))}</div>
+                    <div style="font-family:'JetBrains Mono',monospace;font-size:10px;color:#334155;margin-top:2px;">
+                      traffic:{int(row['traffic'])} · signal:{int(row['signal'])} · mac:{str(row.get('mac','?'))[:18]}</div>
+                  </div>
+                </div>""",unsafe_allow_html=True)
+
+    with tab3:
+        st.markdown("#### Device Drilldown")
+        dev_list=sorted(df["device_id"].unique().tolist())
+        default=dev_list.index(st.session_state.sel_dev) if st.session_state.sel_dev in dev_list else 0
+        sel=st.selectbox("Select device",dev_list,index=default,key="drill_dev")
+        st.session_state.sel_dev=sel
+        row_sel=results[results["device_id"]==sel]
+        hist=df[df["device_id"]==sel].tail(80).copy()
+        hist["time"]=pd.to_datetime(hist["timestamp"],unit="s")
+        if not row_sel.empty:
+            row=row_sel.iloc[0]; sv=row.get("severity","none"); c=SC.get(sv,"#00ff88")
             for col,(lb,val,cc) in zip(st.columns(4),[
                 ("ANOMALY TYPE",str(row.get("anomaly_type","normal")).replace("_"," ").upper(),c),
                 ("SEVERITY",sv.upper(),c),
@@ -496,58 +624,33 @@ def page_details():
                 ("TRAFFIC",f"{int(row['traffic'])} pkts/s","#eab308"),
             ]):
                 with col: st.markdown(f'<div class="icard"><div class="icard-t">{lb}</div><div class="icard-v" style="color:{cc};font-size:17px;">{val}</div></div>',unsafe_allow_html=True)
-            cls=SS.get(sv,"al")
-            st.markdown(f'<div class="ar {cls}" style="margin:10px 0 16px;"><div style="color:{c};font-size:13px;">{row.get("explanation","")}</div></div>',unsafe_allow_html=True)
-            hist=df[df["device_id"]==dev].tail(60)
-            if not hist.empty:
-                h1,h2=st.columns(2)
-                with h1: st.markdown("**Traffic**"); st.line_chart(hist.set_index("timestamp")[["traffic"]],height=160,use_container_width=True)
-                with h2: st.markdown("**Signal & Packets**"); st.line_chart(hist.set_index("timestamp")[["signal","packet_rate"]],height=160,use_container_width=True)
-            if st.button("Clear focus"): st.session_state.sel_dev=None; st.rerun()
-            st.markdown("---")
-
-    af=fil[fil["is_anomaly"]]
-    st.markdown(f"#### Results — {len(fil)} devices")
-    for col,(lb,val,c) in zip(st.columns(4),[
-        ("SHOWN",str(len(fil)),"#94a3b8"),
-        ("ANOMALIES",str(len(af)),"#ef4444" if len(af) else "#00ff88"),
-        ("AVG TRAFFIC",f"{fil['traffic'].mean():.0f}" if not fil.empty else "—","#00d4ff"),
-        ("AVG SIGNAL",f"{fil['signal'].mean():.0f}" if not fil.empty else "—","#eab308"),
-    ]):
-        with col: st.markdown(f'<div class="icard"><div class="icard-t">{lb}</div><div class="icard-v" style="color:{c};">{val}</div></div>',unsafe_allow_html=True)
-
-    st.markdown("<br>",unsafe_allow_html=True)
-    if not af.empty:
-        st.markdown("#### Anomaly Events")
-        for _,row in af.iterrows():
-            sv=row.get("severity","low"); c=SC.get(sv,"#06b6d4"); cl=SS.get(sv,"al")
-            at=str(row.get("anomaly_type","?")).replace("_"," ").upper()
-            st.markdown(f"""<div class="ar {cl}">
-              <div style="width:10px;height:10px;border-radius:50%;background:{c};margin-top:3px;flex-shrink:0;"></div>
-              <div style="flex:1;"><b style="font-family:'JetBrains Mono',monospace;font-size:11px;">{row['device_id']}</b>
-              <span style="color:{c};font-size:11px;font-weight:600;margin-left:10px;">{at}</span>
-              <span style="font-family:'JetBrains Mono',monospace;font-size:10px;color:#334155;margin-left:6px;">sev:{sv} conf:{row.get('confidence','?')}</span>
-              <div style="color:#94a3b8;font-size:12px;">{str(row.get('explanation',''))}</div>
-              <div style="font-family:'JetBrains Mono',monospace;font-size:10px;color:#334155;margin-top:2px;">
-                traffic:{int(row['traffic'])} · signal:{int(row['signal'])} · mac:{str(row.get('mac','?'))[:18]}</div></div>
-            </div>""",unsafe_allow_html=True)
-
-    st.markdown("#### Device Table")
-    dc=["device_id","type","traffic","packet_rate","signal","status","mac_changed","anomaly_type","severity","confidence","explanation"]
-    st.dataframe(fil[[c for c in dc if c in fil.columns]].reset_index(drop=True),use_container_width=True,height=320)
-
-    with st.expander("📁 Historical log (last 200 rows)"):
-        hd=st.selectbox("Filter device",["ALL"]+sorted(df["device_id"].unique().tolist()),key="hdev")
-        hdf=df if hd=="ALL" else df[df["device_id"]==hd]
-        st.dataframe(hdf.tail(200).reset_index(drop=True),use_container_width=True,height=260)
+            cl=SS.get(sv,"al")
+            st.markdown(f'<div class="ar {cl}" style="margin:10px 0 16px;"><div style="color:{c};font-size:13px;">{row.get("explanation","")}</div></div>',unsafe_allow_html=True)
+        if not hist.empty:
+            d1,d2=st.columns(2)
+            with d1:
+                st.markdown("**Traffic history**")
+                tch=alt.Chart(hist).mark_area(color="#00ff88",opacity=0.3,line={"color":"#00ff88","strokeWidth":1.5}).encode(
+                    x=alt.X("time:T",title=""),y=alt.Y("traffic:Q",title="pkts/s"),tooltip=["time:T","traffic"]
+                ).properties(height=180).configure_view(strokeOpacity=0).configure_axis(gridColor="#1e293b",domainColor="#1e293b")
+                st.altair_chart(tch,use_container_width=True)
+            with d2:
+                st.markdown("**Signal & Packet Rate**")
+                base=alt.Chart(hist)
+                s2=base.mark_line(color="#00d4ff",strokeWidth=1.5).encode(x="time:T",y=alt.Y("signal:Q"),tooltip=["time:T","signal"])
+                p2=base.mark_line(color="#a855f7",strokeWidth=1.5,strokeDash=[4,2]).encode(x="time:T",y="packet_rate:Q",tooltip=["time:T","packet_rate"])
+                combo=(s2+p2).properties(height=180).configure_view(strokeOpacity=0).configure_axis(gridColor="#1e293b",domainColor="#1e293b")
+                st.altair_chart(combo,use_container_width=True)
+            st.markdown("**Raw history (last 80 readings)**")
+            st.dataframe(hist[["time","traffic","packet_rate","signal","status"]].reset_index(drop=True),use_container_width=True,height=220)
 
     if st.checkbox("Auto-refresh (3s)",key="det_auto"): time.sleep(3); st.rerun()
 
 # ══════════════════════════════════════════════════════════════════════════════
 # ROUTER
 # ══════════════════════════════════════════════════════════════════════════════
-if not st.session_state.logged_in:                page_login()
-elif st.session_state.page=="dashboard":          page_dashboard()
-elif st.session_state.page=="topology":           page_topology()
-elif st.session_state.page=="details":            page_details()
-else:                                             page_login()
+if not st.session_state.logged_in:               page_login()
+elif st.session_state.page=="dashboard":         page_dashboard()
+elif st.session_state.page=="topology":          page_topology()
+elif st.session_state.page=="details":           page_details()
+else:                                            page_login()
