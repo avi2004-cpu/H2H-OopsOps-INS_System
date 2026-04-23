@@ -671,14 +671,14 @@ def page_details():
             tc=alt.Chart(plot_df).mark_line(color="#00ff88",strokeWidth=1.5,opacity=0.85).encode(
                 x=alt.X("time:T",title="Time",axis=alt.Axis(labelColor="#475569",titleColor="#475569")),
                 y=alt.Y("traffic:Q",title="pkts/s",axis=alt.Axis(labelColor="#475569",titleColor="#475569")),
-                tooltip=["device_id","traffic","time:T"]
+                tooltip=["traffic","time:T"]
             ).properties(height=180).configure_view(strokeOpacity=0).configure_axis(gridColor="#1e293b",domainColor="#1e293b")
             st.altair_chart(tc,use_container_width=True)
 
             st.markdown("**Signal Strength (dBm)**")
             sc3=alt.Chart(plot_df).mark_line(color="#00d4ff",strokeWidth=1.5,opacity=0.85).encode(
                 x=alt.X("time:T",title="Time"),y=alt.Y("signal:Q",title="dBm"),
-                tooltip=["device_id","signal","time:T"]
+                tooltip=["signal","time:T"]
             ).properties(height=180).configure_view(strokeOpacity=0).configure_axis(gridColor="#1e293b",domainColor="#1e293b")
             st.altair_chart(sc3,use_container_width=True)
 
