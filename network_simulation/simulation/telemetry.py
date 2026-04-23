@@ -22,6 +22,10 @@ COLUMNS = [
     "syslog_msg",
 ]
 
+# NEW: CSV RESET CONTROL
+START_TIME = time.time()
+RESET_INTERVAL = 180  # 3 minutes
+
 
 def _syslog(device_id, status, traffic, mac_changed):
     ts   = time.strftime("%b %d %H:%M:%S")
@@ -38,6 +42,8 @@ def _syslog(device_id, status, traffic, mac_changed):
 
 
 def generate_telemetry(devices, connections):
+    global START_TIME
+
     data = []
 
     for d in devices:
@@ -132,21 +138,30 @@ def generate_telemetry(devices, connections):
     # Ensure directory exists
     os.makedirs(DATA_DIR, exist_ok=True)
 
-    # SAFE CSV WRITING (HEADER + AUTO FIX)
-    if not os.path.exists(FILE):
+    current_time = time.time()
+
+    # RESET CSV EVERY 3 MINUTES (SAFE)
+    if current_time - START_TIME > RESET_INTERVAL:
+        print("\n[INFO] Resetting CSV file (3 min refresh)...\n")
         df.to_csv(FILE, index=False)
+        START_TIME = current_time
+
     else:
-        try:
-            existing = pd.read_csv(FILE, nrows=0)
-
-            if list(existing.columns) != COLUMNS:
-                print("[INFO] Fixing CSV header mismatch...")
-                df.to_csv(FILE, index=False)
-            else:
-                df.to_csv(FILE, mode='a', header=False, index=False)
-
-        except Exception:
-            print("[WARNING] CSV corrupted. Recreating file...")
+        # SAFE CSV WRITING (HEADER + AUTO FIX)
+        if not os.path.exists(FILE):
             df.to_csv(FILE, index=False)
+        else:
+            try:
+                existing = pd.read_csv(FILE, nrows=0)
+
+                if list(existing.columns) != COLUMNS:
+                    print("[INFO] Fixing CSV header mismatch...")
+                    df.to_csv(FILE, index=False)
+                else:
+                    df.to_csv(FILE, mode='a', header=False, index=False)
+
+            except Exception:
+                print("[WARNING] CSV corrupted. Recreating file...")
+                df.to_csv(FILE, index=False)
 
     return df

@@ -1,8 +1,8 @@
 {
-  "tick": 161,
-  "timestamp": 1776947998,
-  "last_anomaly": "ddos on ['device_3', 'device_4']",
-  "anomaly_count": 3,
+  "tick": 36,
+  "timestamp": 1776957989,
+  "last_anomaly": "traffic_spike on device_11",
+  "anomaly_count": 1,
   "device_count": 15,
   "alive": true
 }

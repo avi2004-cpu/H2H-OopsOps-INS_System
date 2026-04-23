@@ -201,7 +201,7 @@ def page_topology():
             "severity":str(row.get("severity","none")),
             "explanation":str(row.get("explanation",""))[:130],
         })
-    topo_edges=[{"from":e["source"],"to":e["target"]} for e in topo["links"]]
+    topo_edges=[{"from":e["source"],"to":e["target"]} for e in topo["edges"]]
     net_id = (st.session_state.sel_net or NETWORKS[0])['id']
     if net_id == 'net_b':
       allowed = set([n['id'] for n in topo['nodes'] 
@@ -269,7 +269,6 @@ canvas{{position:absolute;top:0;left:0;width:100%;height:100%;}}
 <div id="mode">
   <button class="mb active" id="mb-circular" onclick="setMode('circular',this)">CIRCULAR</button>
   <button class="mb" id="mb-hierarchy" onclick="setMode('hierarchy',this)">HIERARCHY</button>
-  <button class="mb" id="mb-force" onclick="setMode('force',this)">FORCE</button>
   <button class="mb" onclick="toggleFullscreen()">⛶</button>
 </div>
 <div id="leg">
