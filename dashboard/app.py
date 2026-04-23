@@ -2,10 +2,10 @@ import streamlit as st
 import pandas as pd
 import json, os, sys, time
 import altair as alt
+import requests
 
 # ── Path setup ────────────────────────────────────────────────────────────────
 ROOT        = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CSV_PATH    = os.path.join(ROOT, "network_simulation", "data", "network_data.csv")
 TOPO_PATH   = os.path.join(ROOT, "network_simulation", "data", "topology.json")
 STATUS_PATH = os.path.join(ROOT, "network_simulation", "data", "sim_status.json")
 sys.path.insert(0, ROOT)
@@ -14,6 +14,9 @@ from ml_model.model import AnomalyDetector
 
 st.set_page_config(page_title="INS-System", page_icon="🛡️", layout="wide",
                    initial_sidebar_state="collapsed")
+from streamlit_autorefresh import st_autorefresh
+
+st_autorefresh(interval=2000, key="live_refresh")
 
 st.markdown("""
 <style>
@@ -56,18 +59,32 @@ SS={"critical":"ac","high":"ah","medium":"am","low":"al"}
 
 @st.cache_data(ttl=3)
 def load_csv():
-    df = pd.read_csv(CSV_PATH)
+    try:
+        API_URL = "https://h2h-oopsops-ins-system.onrender.com/data"
 
-    # ✅ Fix data types
-    df["traffic"] = pd.to_numeric(df["traffic"], errors="coerce")
-    df["signal"] = pd.to_numeric(df["signal"], errors="coerce")
-    df["packet_rate"] = pd.to_numeric(df["packet_rate"], errors="coerce")
-    df["timestamp"] = pd.to_numeric(df["timestamp"], errors="coerce")
+        res = requests.get(API_URL, timeout=5)
+        data = res.json()
 
-    # remove bad rows (optional but safe)
-    df = df.dropna()
+        df = pd.DataFrame(data)
 
-    return df
+        if df.empty:
+            return df
+
+        # FIX TYPES
+        df["traffic"] = pd.to_numeric(df["traffic"], errors="coerce")
+        df["signal"] = pd.to_numeric(df["signal"], errors="coerce")
+        df["packet_rate"] = pd.to_numeric(df["packet_rate"], errors="coerce")
+        df["timestamp"] = pd.to_numeric(df["timestamp"], errors="coerce")
+
+        df = df.dropna()
+
+        return df
+
+    except Exception as e:
+        st.warning(f"API error: {e}")
+        return pd.DataFrame()
+
+  
 
 @st.cache_resource
 def get_detector():
