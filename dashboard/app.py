@@ -202,6 +202,44 @@ def page_topology():
             "explanation":str(row.get("explanation",""))[:130],
         })
     topo_edges=[{"from":e["source"],"to":e["target"]} for e in topo["links"]]
+    net_id = (st.session_state.sel_net or NETWORKS[0])['id']
+    if net_id == 'net_b':
+      allowed = set([n['id'] for n in topo['nodes'] 
+                   if 'ap_2' in n['id'] or 'switch_2' in n['id'] 
+                   or n.get('connected_to') == 'ap_2'])
+      topo_nodes = [n for n in topo_nodes if n['id'] in allowed or n['type'] in ('switch','access_point')]
+      topo_edges = [e for e in topo_edges if e['from'] in allowed or e['to'] in allowed]
+    elif net_id == 'net_lab':
+      allowed = set([n['id'] for n in topo['nodes'] 
+                   if 'ap_3' in n['id'] or 'switch_1' in n['id']
+                   or n.get('connected_to') == 'ap_3'])
+      topo_nodes = [n for n in topo_nodes if n['id'] in allowed or n['type'] in ('switch','access_point')]
+      topo_edges = [e for e in topo_edges if e['from'] in allowed or e['to'] in allowed]
+    # 🔥 ADD INTERNET + ROUTER (DO NOT REMOVE EXISTING CODE)
+
+    topo_nodes.insert(0, {
+        "id": "internet",
+        "type": "internet",
+        "color": "rgb(0,200,255)",
+        "border": "rgb(0,150,200)",
+        "label": "NET",
+        "is_anomaly": False
+    })
+
+    topo_nodes.insert(1, {
+        "id": "router_main",
+        "type": "router",
+        "color": "rgb(0,255,200)",
+        "border": "rgb(0,200,150)",
+        "label": "RTR",
+        "is_anomaly": False
+    })
+
+    topo_edges.insert(0, {"from": "internet", "to": "router_main"})
+
+    for n in topo_nodes:
+        if n["type"] == "switch":
+            topo_edges.append({"from": "router_main", "to": n["id"]})  
     nodes_json=json.dumps(topo_nodes)
     edges_json=json.dumps(topo_edges)
 
@@ -232,6 +270,7 @@ canvas{{position:absolute;top:0;left:0;width:100%;height:100%;}}
   <button class="mb active" id="mb-circular" onclick="setMode('circular',this)">CIRCULAR</button>
   <button class="mb" id="mb-hierarchy" onclick="setMode('hierarchy',this)">HIERARCHY</button>
   <button class="mb" id="mb-force" onclick="setMode('force',this)">FORCE</button>
+  <button class="mb" onclick="toggleFullscreen()">⛶</button>
 </div>
 <div id="leg">
   <div class="lg"><div class="ld" style="background:rgb(0,255,120)"></div>Normal</div>
@@ -250,35 +289,48 @@ const ctx=cv.getContext('2d');
 const tip=document.getElementById('tip');
 let layoutMode='circular';
 
-function resize(){{cv.width=wrap.offsetWidth;cv.height=wrap.offsetHeight;}}
+function resize(){{
+  cv.width = wrap.clientWidth;
+  cv.height = wrap.clientHeight;}}
 resize();
 window.addEventListener('resize',()=>{{resize();applyLayout();}});
+document.addEventListener('fullscreenchange', resize);
 
 const pos={{}};
 const vel={{}};
 
 function circularLayout(){{
   const W=cv.width,H=cv.height,cx=W/2,cy=H/2;
+  const internet=NODES.filter(n=>n.type==='internet');
+  const router=NODES.filter(n=>n.type==='router');
   const switches=NODES.filter(n=>n.type==='switch');
   const aps=NODES.filter(n=>n.type==='access_point');
-  const devs=NODES.filter(n=>n.type!=='switch'&&n.type!=='access_point');
+  const devs=NODES.filter(n=>!['internet','router','switch','access_point'].includes(n.type));
+
+  internet.forEach(n=>{{pos[n.id]={{x:cx,y:cy-180}};vel[n.id]={{x:0,y:0}};}});
+  router.forEach(n=>{{pos[n.id]={{x:cx,y:cy-120}};vel[n.id]={{x:0,y:0}};}});
+
   switches.forEach((n,i)=>{{
     const a=(2*Math.PI*i/Math.max(switches.length,1))-Math.PI/2;
-    pos[n.id]={{x:cx+70*Math.cos(a),y:cy+60*Math.sin(a)}};vel[n.id]={{x:0,y:0}};
+    pos[n.id]={{x:cx+120*Math.cos(a),y:cy+20*Math.sin(a)}};vel[n.id]={{x:0,y:0}};
   }});
+
   aps.forEach((n,i)=>{{
     const a=(2*Math.PI*i/Math.max(aps.length,1))-Math.PI/2;
-    pos[n.id]={{x:cx+185*Math.cos(a),y:cy+165*Math.sin(a)}};vel[n.id]={{x:0,y:0}};
+    pos[n.id]={{x:cx+210*Math.cos(a),y:cy+120*Math.sin(a)}};vel[n.id]={{x:0,y:0}};
   }});
-  const apKids={{}};aps.forEach(ap=>apKids[ap.id]=[]);
+
+  const apKids={{}};
+  aps.forEach(ap=>{{apKids[ap.id]=[];}});
   devs.forEach(d=>{{
     let found=false;
     for(const e of EDGES){{
-      if(e.from===d.id&&apKids[e.to]!==undefined){{apKids[e.to].push(d.id);found=true;break;}}
-      if(e.to===d.id&&apKids[e.from]!==undefined){{apKids[e.from].push(d.id);found=true;break;}}
+      if(e.from===d.id && apKids[e.to]!==undefined){{apKids[e.to].push(d.id);found=true;break;}}
+      if(e.to===d.id && apKids[e.from]!==undefined){{apKids[e.from].push(d.id);found=true;break;}}
     }}
-    if(!found&&aps.length>0)apKids[aps[0].id].push(d.id);
+    if(!found && aps.length>0){{apKids[aps[0].id].push(d.id);}}
   }});
+
   aps.forEach(ap=>{{
     const kids=apKids[ap.id]||[];
     const baseAngle=Math.atan2(pos[ap.id].y-cy,pos[ap.id].x-cx);
@@ -286,41 +338,76 @@ function circularLayout(){{
     kids.forEach((did,i)=>{{
       const t=kids.length>1?i/(kids.length-1):0.5;
       const a=baseAngle-spread/2+spread*t;
-      pos[did]={{x:cx+315*Math.cos(a),y:cy+280*Math.sin(a)}};vel[did]={{x:0,y:0}};
+      pos[did]={{x:cx+315*Math.cos(a),y:cy+240*Math.sin(a)}};vel[did]={{x:0,y:0}};
     }});
   }});
 }}
 
 function hierarchyLayout(){{
-  const W=cv.width,H=cv.height;
-  const switches=NODES.filter(n=>n.type==='switch');
-  const aps=NODES.filter(n=>n.type==='access_point');
-  const devs=NODES.filter(n=>n.type!=='switch'&&n.type!=='access_point');
-  switches.forEach((n,i)=>{{pos[n.id]={{x:W/2+(i-(switches.length-1)/2)*170,y:H*0.13}};vel[n.id]={{x:0,y:0}};}});
-  aps.forEach((n,i)=>{{pos[n.id]={{x:W*0.12+(W*0.76)*i/Math.max(aps.length-1,1),y:H*0.42}};vel[n.id]={{x:0,y:0}};}});
-  const apKids={{}};aps.forEach(ap=>apKids[ap.id]=[]);
+  const W = cv.width;
+  const H = cv.height;
+  const internet = NODES.filter(n=>n.type==='internet');
+  const router   = NODES.filter(n=>n.type==='router');
+  const switches = NODES.filter(n=>n.type==='switch');
+  const aps      = NODES.filter(n=>n.type==='access_point');
+  const devs     = NODES.filter(n=>!['internet','router','switch','access_point'].includes(n.type));
+
+  internet.forEach(n=>{{pos[n.id]={{x:W/2,y:H*0.08}};vel[n.id]={{x:0,y:0}};}});
+  router.forEach(n=>{{pos[n.id]={{x:W/2,y:H*0.18}};vel[n.id]={{x:0,y:0}};}});
+
+  switches.forEach((n,i)=>{{
+    const x = W*0.16 + (i/(Math.max(switches.length-1,1)))*W*0.68;
+    pos[n.id]={{x:x,y:H*0.32}};vel[n.id]={{x:0,y:0}};
+  }});
+
+  aps.forEach((n,i)=>{{
+    const x = W*0.15 + (i/(Math.max(aps.length-1,1)))*W*0.7;
+    pos[n.id]={{x:x,y:H*0.52}};vel[n.id]={{x:0,y:0}};
+  }});
+
+  const apKids={{}};
+  aps.forEach(ap=>{{apKids[ap.id]=[];}});
   devs.forEach(d=>{{
     let found=false;
     for(const e of EDGES){{
-      if(e.from===d.id&&apKids[e.to]!==undefined){{apKids[e.to].push(d.id);found=true;break;}}
-      if(e.to===d.id&&apKids[e.from]!==undefined){{apKids[e.from].push(d.id);found=true;break;}}
+      if(e.from===d.id && apKids[e.to]!==undefined){{apKids[e.to].push(d.id);found=true;break;}}
+      if(e.to===d.id && apKids[e.from]!==undefined){{apKids[e.from].push(d.id);found=true;break;}}
     }}
-    if(!found&&aps.length>0)apKids[aps[0].id].push(d.id);
+    if(!found && aps.length>0){{apKids[aps[0].id].push(d.id);}}
   }});
+
   aps.forEach(ap=>{{
-    const kids=apKids[ap.id]||[];const apX=pos[ap.id].x;
-    const spread=Math.min(kids.length*58,W*0.38);
-    kids.forEach((did,i)=>{{
-      const xOff=kids.length>1?-spread/2+spread*i/(kids.length-1):0;
-      pos[did]={{x:apX+xOff,y:H*0.76+(i%2)*28}};vel[did]={{x:0,y:0}};
+    const kids = apKids[ap.id]||[];
+    const spread = Math.min(140, W*0.18);
+    kids.forEach((child,i)=>{{
+      const xOffset = kids.length > 1
+        ? -spread/2 + (spread * i)/(kids.length - 1)
+        : 0;
+      pos[child] = {{x: pos[ap.id].x + xOffset, y: pos[ap.id].y + 120}};
+      vel[child] = {{x:0,y:0}};
     }});
+  }});
+
+  const placed = new Set(Object.values(apKids).flat());
+  const leftovers = devs.filter(d=>!placed.has(d.id));
+  leftovers.forEach((d,i)=>{{
+    const x = W*0.15 + (i/(Math.max(leftovers.length-1,1)))*W*0.7;
+    pos[d.id] = {{x:x,y:H*0.78}};
+    vel[d.id] = {{x:0,y:0}};
   }});
 }}
 
 function forceInit(){{
+  const W = cv.width;
+  const H = cv.height;
+  const radius = Math.min(W, H) * 0.34;
   NODES.forEach((n,i)=>{{
-    if(!pos[n.id])pos[n.id]={{x:cv.width/2+Math.cos(2*Math.PI*i/NODES.length)*200,y:cv.height/2+Math.sin(2*Math.PI*i/NODES.length)*200}};
-    vel[n.id]={{x:0,y:0}};
+    const angle = 2*Math.PI*i/Math.max(NODES.length,1);
+    pos[n.id] = {{
+      x: W/2 + Math.cos(angle) * radius + (Math.random()-0.5) * 80,
+      y: H/2 + Math.sin(angle) * radius + (Math.random()-0.5) * 80
+    }};
+    vel[n.id] = {{x:0, y:0}};
   }});
 }}
 
@@ -397,7 +484,37 @@ function drawParts(){{
   }});
 }}
 
-function nr(n){{return n.type==='switch'?28:n.type==='access_point'?24:18;}}
+function nr(n){{
+  if(n.type==='internet') return 30;
+  if(n.type==='router') return 28;
+  if(n.type==='switch') return 26;
+  if(n.type==='access_point') return 24;
+  return 20;
+  }}
+
+function drawIcon(n, x, y) {{
+  ctx.font = "18px Segoe UI Emoji";
+
+  const icons = {{
+    phone: "📱",
+    camera: "📷",
+    smart_light: "💡",
+    thermostat: "🌡️",
+    sensor: "📡",
+    switch: "🔀",
+    router: "📶",
+    access_point: "📡",
+    internet: "🌐",
+    device: "🖥️",
+    unknown: "❓"
+  }};
+
+  const icon = icons[n.type] || "🖥️";
+
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(icon, x, y);
+}}
 
 function draw(){{
   ctx.clearRect(0,0,cv.width,cv.height);
@@ -442,9 +559,8 @@ function draw(){{
     ctx.fillStyle=n.color.replace('rgb','rgba').replace(')',',0.14)');
     ctx.strokeStyle=n.border;ctx.lineWidth=2.5;ctx.fill();ctx.stroke();
     ctx.beginPath();ctx.arc(p.x,p.y,r*0.32,0,2*Math.PI);ctx.fillStyle=n.color;ctx.fill();
-    ctx.font=`bold ${{n.type==='switch'?12:10}}px monospace`;
     ctx.fillStyle='#f1f5f9';ctx.textAlign='center';ctx.textBaseline='middle';
-    ctx.fillText(n.label,p.x,p.y);
+    drawIcon(n, p.x, p.y);
     ctx.font='9px monospace';
     ctx.fillStyle=n.is_anomaly?'rgba(255,90,90,0.9)':'#334155';
     ctx.fillText(n.id,p.x,p.y+r+12);
@@ -642,7 +758,77 @@ def page_details():
                 combo=(s2+p2).properties(height=180).configure_view(strokeOpacity=0).configure_axis(gridColor="#1e293b",domainColor="#1e293b")
                 st.altair_chart(combo,use_container_width=True)
             st.markdown("**Raw history (last 80 readings)**")
-            st.dataframe(hist[["time","traffic","packet_rate","signal","status"]].reset_index(drop=True),use_container_width=True,height=220)
+
+# Get per-column thresholds for this device
+            b = get_detector().device_baselines.get(sel, {})
+            t_thresh = b.get('traffic_flood_thresh', 500)
+            s_thresh = b.get('signal_drop_thresh', 20)
+            p_thresh = b.get('packet_flood_thresh', 250)
+
+            def colour_row(row):
+                styles = [''] * len(row)
+                cols = list(row.index)
+
+                # Traffic
+                if 'traffic' in cols:
+                    v = row['traffic']
+                    if v > t_thresh:
+                        styles[cols.index('traffic')] = 'background-color:#450a0a;color:#ef4444;font-weight:600'
+                    elif v > t_thresh * 0.6:
+                        styles[cols.index('traffic')] = 'background-color:#1a0e05;color:#f97316'
+
+                # Signal
+                if 'signal' in cols:
+                    v = row['signal']
+                    if v < s_thresh:
+                        styles[cols.index('signal')] = 'background-color:#450a0a;color:#ef4444;font-weight:600'
+                    elif v < s_thresh * 2:
+                        styles[cols.index('signal')] = 'background-color:#141a05;color:#eab308'
+
+                # Packet rate
+                if 'packet_rate' in cols:
+                    v = row['packet_rate']
+                    if v > p_thresh:
+                        styles[cols.index('packet_rate')] = 'background-color:#450a0a;color:#ef4444;font-weight:600'
+                    elif v > p_thresh * 0.6:
+                        styles[cols.index('packet_rate')] = 'background-color:#1a0e05;color:#f97316'
+
+                # Status
+                if 'status' in cols:
+                    if row['status'] == 'offline':
+                        styles[cols.index('status')] = 'background-color:#450a0a;color:#ef4444;font-weight:600'
+
+                return styles
+
+            display_hist = hist[['time','traffic','packet_rate','signal','status']].reset_index(drop=True)
+            st.dataframe(
+                display_hist.style.apply(colour_row, axis=1),
+                use_container_width=True,
+                height=280
+            )
+
+            # Summary stats below table
+            s1,s2,s3,s4 = st.columns(4)
+            s1.markdown(f"""<div class="icard">
+              <div class="icard-t">Peak Traffic</div>
+              <div class="icard-v" style="color:{'#ef4444' if hist['traffic'].max()>t_thresh else '#00ff88'};font-size:16px;">
+                {hist['traffic'].max():,.0f} pkts/s</div>
+            </div>""", unsafe_allow_html=True)
+            s2.markdown(f"""<div class="icard">
+              <div class="icard-t">Avg Traffic</div>
+              <div class="icard-v" style="color:#94a3b8;font-size:16px;">
+                {hist['traffic'].mean():,.0f} pkts/s</div>
+            </div>""", unsafe_allow_html=True)
+            s3.markdown(f"""<div class="icard">
+              <div class="icard-t">Min Signal</div>
+              <div class="icard-v" style="color:{'#ef4444' if hist['signal'].min()<s_thresh else '#00ff88'};font-size:16px;">
+                {hist['signal'].min()} dBm</div>
+            </div>""", unsafe_allow_html=True)
+            s4.markdown(f"""<div class="icard">
+              <div class="icard-t">Offline Events</div>
+              <div class="icard-v" style="color:{'#ef4444' if (hist['status']=='offline').sum()>0 else '#00ff88'};font-size:16px;">
+                {(hist['status']=='offline').sum()}</div>
+            </div>""", unsafe_allow_html=True)
 
     if st.checkbox("Auto-refresh (3s)",key="det_auto"): time.sleep(3); st.rerun()
 
