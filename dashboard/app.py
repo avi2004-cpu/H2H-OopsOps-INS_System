@@ -57,7 +57,6 @@ NETWORKS=[
 SC={"critical":"#ef4444","high":"#f97316","medium":"#eab308","low":"#06b6d4","none":"#00ff88"}
 SS={"critical":"ac","high":"ah","medium":"am","low":"al"}
 
-@st.cache_data(ttl=3)
 def load_csv():
     try:
         API_URL = "https://h2h-oopsops-ins-system.onrender.com/data"
@@ -658,7 +657,15 @@ def page_details():
         st.markdown("#### Traffic & Signal Over Time")
         sel_dev_ts=st.selectbox("Filter by device",["ALL"]+sorted(df["device_id"].unique().tolist()),key="ts_dev")
         plot_df=(df if sel_dev_ts=="ALL" else df[df["device_id"]==sel_dev_ts]).copy()
-        plot_df["time"]=pd.to_datetime(plot_df["timestamp"],unit="s")
+        plot_df["time"] = pd.to_datetime(plot_df["timestamp"], unit="s")
+
+        # IMPORTANT FIX: group by time
+        plot_df = plot_df.sort_values("time")
+
+        plot_df = plot_df.groupby("time", as_index=False).agg({
+            "traffic": "mean",
+            "signal": "mean"
+        })
         if not plot_df.empty:
             st.markdown("**Traffic (pkts/s)**")
             tc=alt.Chart(plot_df).mark_line(color="#00ff88",strokeWidth=1.5,opacity=0.85).encode(
@@ -678,6 +685,7 @@ def page_details():
             st.markdown("**Anomaly Count Over Time (30s buckets)**")
             anom_ts=df.copy()
             anom_ts["time"]=pd.to_datetime(anom_ts["timestamp"],unit="s").dt.floor("30s")
+            anom_ts = anom_ts.sort_values("time")
             mean_t=anom_ts["traffic"].mean()
             anom_ts["flagged"]=(anom_ts["traffic"]>mean_t*2).astype(int)
             anom_agg=anom_ts.groupby("time")["flagged"].sum().reset_index()
