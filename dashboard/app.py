@@ -6,6 +6,7 @@ import requests
 
 # ── Path setup ────────────────────────────────────────────────────────────────
 ROOT        = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CSV_PATH    = os.path.join(ROOT, "network_simulation", "data", "network_data.csv")
 TOPO_PATH   = os.path.join(ROOT, "network_simulation", "data", "topology.json")
 STATUS_PATH = os.path.join(ROOT, "network_simulation", "data", "sim_status.json")
 sys.path.insert(0, ROOT)
@@ -16,7 +17,7 @@ st.set_page_config(page_title="INS-System", page_icon="🛡️", layout="wide",
                    initial_sidebar_state="collapsed")
 from streamlit_autorefresh import st_autorefresh
 
-st_autorefresh(interval=2000, key="live_refresh")
+# NOTE: st_autorefresh is called AFTER session state init below to avoid KeyError on cold start
 
 st.markdown("""
 <style>
@@ -51,12 +52,19 @@ API_URL = "https://h2h-oopsops-ins-system.onrender.com"
 for k,v in {"logged_in":False,"page":"login","sel_net":None,"sel_dev":None,"sim_reset":False}.items():
     if k not in st.session_state: st.session_state[k]=v
 
+# Safe to call autorefresh NOW — session state is fully initialised
+# Only refresh when logged in so login page stays stable
+if st.session_state.logged_in:
+    st_autorefresh(interval=3000, key="live_refresh")
+
 # Reset simulation once per browser session so charts start fresh on every page load
 if not st.session_state.sim_reset:
     try:
         requests.post(f"{API_URL}/reset", timeout=8)
     except Exception:
         pass
+    # Clear all Streamlit data caches so old CSV rows don't linger
+    st.cache_data.clear()
     st.session_state.sim_reset = True
 
 NETWORKS=[
@@ -68,35 +76,45 @@ SC={"critical":"#ef4444","high":"#f97316","medium":"#eab308","low":"#06b6d4","no
 SS={"critical":"ac","high":"ah","medium":"am","low":"al"}
 
 def load_csv():
+    # ── Try remote API first; fall back to local CSV (local dev / offline mode) ──
     try:
         res = requests.get(f"{API_URL}/data", timeout=5)
+        res.raise_for_status()
         data = res.json()
-
         df = pd.DataFrame(data)
+    except Exception:
+        # API unreachable — silently fall back to local CSV (local dev mode)
+        if not os.path.exists(CSV_PATH) or os.path.getsize(CSV_PATH) == 0:
+            return pd.DataFrame()
+        try:
+            df = pd.read_csv(CSV_PATH)
+        except Exception:
+            return pd.DataFrame()
 
-        if df.empty:
-            return df
-
-        # FIX TYPES
-        df["traffic"] = pd.to_numeric(df["traffic"], errors="coerce")
-        df["signal"] = pd.to_numeric(df["signal"], errors="coerce")
-        df["packet_rate"] = pd.to_numeric(df["packet_rate"], errors="coerce")
-        df["timestamp"] = pd.to_numeric(df["timestamp"], errors="coerce")
-
-        df = df.dropna()
-
+    if df.empty:
         return df
 
-    except Exception as e:
-        st.warning(f"API error: {e}")
-        return pd.DataFrame()
+    # FIX TYPES
+    df["traffic"] = pd.to_numeric(df["traffic"], errors="coerce")
+    df["signal"] = pd.to_numeric(df["signal"], errors="coerce")
+    df["packet_rate"] = pd.to_numeric(df["packet_rate"], errors="coerce")
+    df["timestamp"] = pd.to_numeric(df["timestamp"], errors="coerce")
+
+    df = df.dropna()
+
+    return df
 
   
 
-@st.cache_resource
+@st.cache_data(ttl=10)
 def get_detector():
+    """
+    Retrains on the freshest data every 10 seconds.
+    NOT @st.cache_resource — that would freeze the model on pre-reset data forever.
+    Needs ≥150 rows (10 ticks × 15 devices) for a meaningful Isolation Forest baseline.
+    """
     df = load_csv()
-    if df.empty or len(df) < 10:
+    if df.empty or len(df) < 150:
         return None
     det = AnomalyDetector(contamination=0.1)
     det.train(df)
@@ -107,22 +125,49 @@ def load_topo():
     with open(TOPO_PATH) as f: return json.load(f)
 
 def load_status():
+    """Reads live sim status — tries remote API first, falls back to local file."""
     try:
-        with open(STATUS_PATH) as f: return json.load(f)
-    except: return {}
+        res = requests.get(f"{API_URL}/status", timeout=3)
+        res.raise_for_status()
+        return res.json()
+    except Exception:
+        # Fall back to local sim_status.json written by main.py
+        try:
+            with open(STATUS_PATH) as f:
+                return json.load(f)
+        except Exception:
+            return {}
 
 def get_results():
+    """
+    Returns (results_df, full_df).
+    During warmup returns empty/unlabelled frames instead of calling st.stop()
+    so the topology canvas can still render the graph structure while data loads.
+    """
     try:
-        df=load_csv()
+        df = load_csv()
+        EMPTY_COLS = ["device_id","traffic","signal","packet_rate","status",
+                      "mac_changed","anomaly_type","severity","confidence",
+                      "explanation","is_anomaly","type","mac"]
+
         if df.empty:
-            st.warning("⏳ No data yet — simulation is warming up on the backend. This page will auto-refresh.")
-            st.stop()
-        latest=df.sort_values("timestamp").groupby("device_id").last().reset_index()
+            empty = pd.DataFrame(columns=EMPTY_COLS)
+            return empty, empty
+
+        latest = df.sort_values("timestamp").groupby("device_id").last().reset_index()
         det = get_detector()
+
         if det is None:
-            st.warning("⏳ ML model not ready yet — waiting for enough data.")
-            st.stop()
+            # Not enough data yet — return rows with no anomalies flagged
+            latest["is_anomaly"]   = False
+            latest["anomaly_type"] = "warming_up"
+            latest["severity"]     = "none"
+            latest["confidence"]   = "—"
+            latest["explanation"]  = "Baseline training in progress…"
+            return latest, df
+
         return det.predict(latest), df
+
     except Exception as e:
         st.error(f"Data error: {e}"); st.stop()
 
@@ -629,6 +674,20 @@ ${{hov.is_anomaly?`<br><hr style="border-color:#1e293b;margin:5px 0">
   }}else{{tip.style.display='none';cv.style.cursor='default';}}
 }});
 cv.addEventListener('mouseleave',()=>tip.style.display='none');
+
+// ── KEY FIX: defer layout until iframe has real dimensions ──
+// cv.width === 0 immediately on load inside Streamlit iframe.
+// Poll until wrap.clientWidth > 100 then compute all node positions.
+function tryLayout() {{
+  if (wrap.clientWidth > 100) {{
+    applyLayout();
+  }} else {{
+    setTimeout(tryLayout, 80);
+  }}
+}}
+setTimeout(tryLayout, 120);
+window.addEventListener('resize', () => {{ resize(); applyLayout(); }});
+
 (function loop(){{simulate();spawnParts();tickParts();draw();requestAnimationFrame(loop);}}());
 </script></body></html>"""
         components.html(html, height=580, scrolling=False)
@@ -811,7 +870,8 @@ def page_details():
             st.markdown("**Raw history (last 80 readings)**")
 
 # Get per-column thresholds for this device
-            b = get_detector().device_baselines.get(sel, {})
+            _det = get_detector()
+            b = _det.device_baselines.get(sel, {}) if _det is not None else {}
             t_thresh = b.get('traffic_flood_thresh', 500)
             s_thresh = b.get('signal_drop_thresh', 20)
             p_thresh = b.get('packet_flood_thresh', 250)
